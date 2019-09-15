@@ -4233,7 +4233,16 @@ class Server extends AppModel
             }
             return $result;
         }
+    }
 
+    public function redisInfo()
+    {
+        $redis = $this->setupRedis();
+        if (!$redis) {
+            return false;
+        }
+
+        return $redis->info();
     }
 
     public function writeableDirsDiagnostics(&$diagnostic_errors)
