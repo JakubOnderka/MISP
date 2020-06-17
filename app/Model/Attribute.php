@@ -1821,7 +1821,7 @@ class Attribute extends AppModel
         if (!$event) {
             $event = $this->Event->find('first', array(
                 'recursive' => -1,
-                'fields' => array('Event.distribution', 'Event.id', 'Event.info', 'Event.org_id', 'Event.date', 'Event.sharing_group_id', 'Event.disable_correlation'),
+                'fields' => array('Event.distribution', 'Event.id', 'Event.org_id', 'Event.sharing_group_id', 'Event.disable_correlation'),
                 'conditions' => array('id' => $a['event_id']),
                 'order' => array(),
             ));
@@ -1897,11 +1897,14 @@ class Attribute extends AppModel
                     'Attribute.value1',
                     'Attribute.value2',
                 ),
-                'contain' => array('Event' => array('fields' => array('Event.id', 'Event.date', 'Event.info', 'Event.org_id', 'Event.distribution', 'Event.sharing_group_id'))),
+                'contain' => array('Event' => array('fields' => array('Event.id', 'Event.org_id', 'Event.distribution', 'Event.sharing_group_id'))),
                 'order' => array(),
             ));
         }
         $correlations = array();
+        // Save dummy values instead of real values for 'date' and 'info' column: these values are not used anymore,
+        // but because dropping column in MySQl database require table rebuild and for correlation table
+        // (that can be pretty huge) can take hours. Table structure will be changed in future.
         foreach ($correlatingAttributes as $k => $cA) {
             foreach ($cA as $corr) {
                 if (Configure::read('MISP.deadlock_avoidance')) {
@@ -1916,8 +1919,8 @@ class Attribute extends AppModel
                         'a_distribution' => $corr['Attribute']['distribution'],
                         'sharing_group_id' => $corr['Event']['sharing_group_id'],
                         'a_sharing_group_id' => $corr['Attribute']['sharing_group_id'],
-                        'date' => $corr['Event']['date'],
-                        'info' => $corr['Event']['info']
+                        'date' => '1000-01-01', // Dummy value
+                        'info' => '', // Dummy value
                     );
                     $correlations[] = array(
                         'value' => $correlatingValues[$k],
@@ -1930,8 +1933,8 @@ class Attribute extends AppModel
                         'a_distribution' => $a['distribution'],
                         'sharing_group_id' => $event['Event']['sharing_group_id'],
                         'a_sharing_group_id' => $a['sharing_group_id'],
-                        'date' => $event['Event']['date'],
-                        'info' => $event['Event']['info']
+                        'date' => '1000-01-01', // Dummy value
+                        'info' => '', // Dummy value
                     );
                 } else {
                     $correlations[] = array(
@@ -1945,8 +1948,8 @@ class Attribute extends AppModel
                         $corr['Attribute']['distribution'],
                         $corr['Event']['sharing_group_id'],
                         $corr['Attribute']['sharing_group_id'],
-                        $corr['Event']['date'],
-                        $corr['Event']['info']
+                        '1000-01-01', // Dummy value
+                        '', // Dummy value
                     );
                     $correlations[] = array(
                         $correlatingValues[$k],
@@ -1959,8 +1962,8 @@ class Attribute extends AppModel
                         $a['distribution'],
                         $event['Event']['sharing_group_id'],
                         $a['sharing_group_id'],
-                        $event['Event']['date'],
-                        $event['Event']['info']
+                        '1000-01-01', // Dummy value
+                        '', // Dummy value
                     );
                 }
             }
@@ -2591,7 +2594,7 @@ class Attribute extends AppModel
             }
             $event = $this->Event->find('first', array(
                 'recursive' => -1,
-                'fields' => array('Event.distribution', 'Event.id', 'Event.info', 'Event.org_id', 'Event.date', 'Event.sharing_group_id', 'Event.disable_correlation'),
+                'fields' => array('Event.distribution', 'Event.id', 'Event.org_id', 'Event.sharing_group_id', 'Event.disable_correlation'),
                 'conditions' => array('id' => $id),
                 'order' => false,
             ));
