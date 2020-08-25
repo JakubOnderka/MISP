@@ -379,26 +379,17 @@ class OrganisationsController extends AppController
 
     public function fetchOrgsForSG($idList = '{}', $type)
     {
-        if ($type === 'local') {
-            $local = 1;
-        } else {
-            $local = 0;
-        }
+        $local = $type === 'local' ? 1 : 0;
         $idList = json_decode($idList, true);
-        $id_exclusion_list = array_merge($idList, array($this->Auth->user('Organisation')['id']));
-        $temp = $this->Organisation->find('all', array(
-                'conditions' => array(
-                        'local' => $local,
-                        'id !=' => $id_exclusion_list,
-                ),
-                'recursive' => -1,
-                'fields' => array('id', 'name'),
-                'order' => array('lower(name) ASC')
+        $orgs = $this->Organisation->find('list', array(
+            'conditions' => array(
+                'local' => $local,
+                'id !=' => $idList,
+            ),
+            'recursive' => -1,
+            'fields' => array('id', 'name'),
+            'order' => array('lower(name) ASC')
         ));
-        $orgs = array();
-        foreach ($temp as $org) {
-            $orgs[] = array('id' => $org['Organisation']['id'], 'name' => $org['Organisation']['name']);
-        }
         $this->set('local', $local);
         $this->layout = false;
         $this->autoRender = false;

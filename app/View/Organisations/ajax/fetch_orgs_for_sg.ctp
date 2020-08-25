@@ -7,8 +7,8 @@
                     <p><?php echo __('Available Organisations');?></p>
                     <select id="leftValues" size="5" multiple style="width:285px;">
                         <?php
-                            foreach ($orgs as $org) {
-                                echo '<option value="' . h($org['id']) . '" selected>' . h($org['name']) . '</option>';
+                            foreach ($orgs as $id => $name) {
+                                echo '<option value="' . h($id) . '" selected>' . h($name) . '</option>';
                             }
                         ?>
                     </select>
@@ -23,17 +23,19 @@
                 </td>
             </tr>
         </table>
-            <span role="button" tabindex="0" aria-label="<?php echo __('Submit organisations');?>" title="<?php echo __('Submit organisations');?>" class="btn btn-primary" style="margin-left:auto;margin-right:auto;width:40px;" onClick="submitPicklistValues('org', '<?php echo h($local);?>');">Add</span>
-            <span role="button" tabindex="0" aria-label="<?php echo __('Cancel');?>" title="<?php echo __('Cancel');?>" class="btn btn-inverse" style="float:right;margin-left:auto;margin-right:auto;width:40px;" onClick="cancelPicklistValues();"><?php echo __('Cancel');?></span>
+            <span role="button" tabindex="0" aria-label="<?php echo __('Submit organisations');?>" title="<?php echo __('Submit organisations');?>" class="btn btn-primary" style="margin-left:auto;margin-right:auto;width:40px;" onclick="submitPicklistValues('org', '<?php echo h($local);?>');">Add</span>
+            <span role="button" tabindex="0" aria-label="<?php echo __('Cancel');?>" title="<?php echo __('Cancel');?>" class="btn btn-inverse" style="float:right;margin-left:auto;margin-right:auto;width:40px;" onclick="cancelPicklistValues();"><?php echo __('Cancel');?></span>
     </div>
 </div>
 <script>
-$("#btnLeft").click(function () {
+$("#btnLeft").click(function (event) {
+    event.preventDefault();
     var selectedItem = $("#rightValues option:selected");
     $("#leftValues").append(selectedItem);
 });
 
-$("#btnRight").click(function () {
+$("#btnRight").click(function (event) {
+    event.preventDefault();
     var selectedItem = $("#leftValues option:selected");
     $("#rightValues").append(selectedItem);
 });
