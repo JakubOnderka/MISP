@@ -1721,11 +1721,23 @@ class AppModel extends Model
         }
     }
 
+    /**
+     * @return array
+     * @throws JsonException
+     */
     public function checkMISPVersion()
     {
-        $file = new File(ROOT . DS . 'VERSION.json', true);
-        $version_array = json_decode($file->read(), true);
-        $file->close();
+        static $version_array;
+
+        if ($version_array === null) {
+            $file = new File(ROOT . DS . 'VERSION.json', true);
+            $fileContent = $file->read();
+            if ($fileContent === false) {
+                throw new Exception('Could not read VERSIONS.json file content.');
+            }
+            $file->close();
+            $version_array = $this->jsonDecode($fileContent);
+        }
         return $version_array;
     }
 
@@ -2573,12 +2585,9 @@ class AppModel extends Model
     {
         $version = $this->checkMISPVersion();
         $version = implode('.', $version);
-        try {
-            $commit = trim(shell_exec('git log --pretty="%H" -n1 HEAD'));
-        } catch (Exception $e) {
-            $commit = false;
-        }
         $request['header']['MISP-version'] = $version;
+
+        $commit = trim(shell_exec('git log --pretty="%H" -n1 HEAD'));
         if ($commit) {
             $request['header']['commit'] = $commit;
         }

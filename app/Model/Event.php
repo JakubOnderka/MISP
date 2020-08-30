@@ -1379,7 +1379,7 @@ class Event extends AppModel
     /**
      * Download event from remote server.
      *
-     * @param int $eventId
+     * @param int|string $eventId Event ID or UUID
      * @param array $server
      * @param null|HttpSocket $HttpSocket
      * @param boolean $metadataOnly, if True, we only retrieve the metadata
@@ -1387,34 +1387,39 @@ class Event extends AppModel
      * @return array
      * @throws Exception
      */
-    public function downloadEventFromServer($eventId, $server, $HttpSocket=null, $metadataOnly=false)
+    public function downloadEventFromServer($eventId, $server, HttpSocket $HttpSocket=null, $metadataOnly=false)
     {
-        $url = $server['Server']['url'];
         $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
         $request = $this->setupSyncRequest($server);
+
+        $url = $server['Server']['url'];
         if ($metadataOnly) {
-            $uri = $url . '/events/index';
-            $data = ['eventid' => $eventId];
-            $data = json_encode($data);
-            $response = $HttpSocket->post($uri, $data, $request);
+            $url .= '/events/index/searcheventid:' . $eventId;
         } else {
-            $uri = $url . '/events/view/' . $eventId . '/deleted[]:0/deleted[]:1/excludeGalaxy:1';
+            $url .= '/events/view/' . $eventId . '/deleted[]:0/deleted[]:1/excludeGalaxy:1';
             if (!empty($server['Server']['internal'])) {
-                $uri = $uri . '/excludeLocalTags:1';
+                $url .= '/excludeLocalTags:1';
             }
-            $response = $HttpSocket->get($uri, $data = '', $request);
         }
 
+        $response = $HttpSocket->get($url, $data = '', $request);
         if ($response === false) {
-            throw new Exception("Could not reach '$uri'.");
+            throw new Exception("Could not reach '$url'.");
+        } else if ($response->code == 0) {
+            throw new Exception("Fetching the '$url' failed with invalid HTTP response: {$response->body}");
         } else if (!$response->isOk()) {
-            throw new Exception("Fetching the '$uri' failed with HTTP error {$response->code}: {$response->reasonPhrase}");
+            throw new Exception("Fetching the '$url' failed with HTTP error {$response->code}: {$response->reasonPhrase}");
         }
 
-        $event = json_decode($response->body, true);
-        if ($event === null) {
-            throw new Exception('Could not parse event JSON: ' . json_last_error_msg(), json_last_error());
+        $event = $this->jsonDecode($response->body);
+        if ($metadataOnly) {
+            if (empty($event)) {
+                throw new NotFoundException("Fetching the '$url' failed: event with ID $eventId not found");
+            } else {
+                return $event[0];
+            }
         }
+
         return $event;
     }
 
@@ -2388,8 +2393,6 @@ class Event extends AppModel
     public function includeRelatedTags($event, $options)
     {
         $eventTagCache = array();
-        $tags = array();
-        $includeAllTags = !empty($options['includeAllTags']);
         foreach ($event['RelatedAttribute'] as $attributeId => $relatedAttributes) {
             $attributePos = false;
             foreach ($event['Attribute'] as $k => $attribute) {
