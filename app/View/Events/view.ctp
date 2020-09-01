@@ -482,13 +482,13 @@
                     endif;
                 endif;
             ?>
-            <?php if (!empty($event['Event']['warnings'])): ?>
+            <?php if (!empty($event['warnings'])): ?>
                 <div class="warning_container" style="width:80%;">
                     <h4 class="red"><?php echo __('Warning: Potential false positives');?></h4>
                     <?php
-                        $total = count($event['Event']['warnings']);
+                        $total = count($event['warnings']);
                         $current = 1;
-                        foreach ($event['Event']['warnings'] as $id => $name) {
+                        foreach ($event['warnings'] as $id => $name) {
                             echo '<a href="' . $baseurl . '/warninglists/view/' . $id . '">' . h($name) . '</a>' . ($current == $total ? '' : '<br />');
                             $current++;
                         }

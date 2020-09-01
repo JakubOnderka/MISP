@@ -149,7 +149,7 @@
             $valueParts = explode('|', $object['value']);
             foreach ($components as $component => $valuePart) {
               if (isset($object['warnings'][$component]) && isset($valueParts[$valuePart])) {
-                foreach ($object['warnings'][$component] as $warning) $temp .= '<span class=\'bold\'>' . h($valueParts[$valuePart]) . '</span>: <span class=\'red\'>' . h($warning) . '</span><br />';
+                foreach ($object['warnings'][$component] as $warning) $temp .= '<span class=\'bold\'>' . h($valueParts[$valuePart]) . '</span>: <span class=\'red\'>' . h($warning['warninglist_name']) . '</span><br />';
               }
             }
             echo ' <span aria-label="' . __('warning') . '" role="img" tabindex="0" class="fa fa-exclamation-triangle" data-placement="right" data-toggle="popover" data-content="' . h($temp) . '" data-trigger="hover" data-placement="right">&nbsp;</span>';

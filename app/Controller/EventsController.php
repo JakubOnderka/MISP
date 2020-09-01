@@ -1125,6 +1125,7 @@ class EventsController extends AppController
         $conditions['includeAllTags'] = true;
         $conditions['includeGranularCorrelations'] = 1;
         $conditions['includeEventCorrelations'] = false;
+        $conditions['includeWarninglistHits'] = true;
         if (!empty($filters['includeRelatedTags'])) {
             $this->set('includeRelatedTags', 1);
             $conditions['includeRelatedTags'] = 1;
@@ -1566,10 +1567,11 @@ class EventsController extends AppController
             throw new NotFoundException(__('Invalid event'));
         }
 
-        if (!$this->_isRest()) {
-            $conditions['includeAllTags'] = true;
-        } else {
+        if ($this->_isRest()) {
             $conditions['includeAttachments'] = true;
+        } else {
+            $conditions['includeAllTags'] = true;
+            $conditions['includeWarninglistHits'] = true;
         }
         $deleted = 0;
         if (isset($this->params['named']['deleted'])) {

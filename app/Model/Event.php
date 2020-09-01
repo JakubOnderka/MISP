@@ -2229,7 +2229,7 @@ class Event extends AppModel
                 $tempObjectAttributeContainer = array();
                 foreach ($event['Attribute'] as $key => $attribute) {
                     if ($options['enforceWarninglist']) {
-                        if (!$this->Warninglist->filterWarninglistAttributes($warninglists, $attribute, $this->Warninglist)) {
+                        if (!$this->Warninglist->filterWarninglistAttributes($warninglists, $attribute)) {
                             unset($event['Attribute'][$key]);
                             continue;
                         }
@@ -4673,12 +4673,6 @@ class Event extends AppModel
         return $ids;
     }
 
-    public function generateRandomFileName()
-    {
-        return (new RandomTool())->random_str(false, 12);
-    }
-
-
     public function sharingGroupRequired($field)
     {
         if ($this->data[$this->alias]['distribution'] == 4) {
@@ -4728,8 +4722,6 @@ class Event extends AppModel
         $correlatedAttributes,
         $correlatedShadowAttributes,
         $filterType = false,
-        &$eventWarnings,
-        $warningLists,
         $sightingsData
     ) {
         $attribute['objectType'] = 'attribute';
@@ -4796,9 +4788,7 @@ class Event extends AppModel
                 $result = $this->__prepareProposalForView(
                     $proposal,
                     $correlatedShadowAttributes,
-                    $filterType,
-                    $eventWarnings,
-                    $warningLists
+                    $filterType
                 );
                 if ($result['include']) {
                     $temp[] = $result['data'];
@@ -4806,7 +4796,7 @@ class Event extends AppModel
             }
             $attribute['ShadowAttribute'] = $temp;
         }
-        $attribute = $this->__prepareGenericForView($attribute, $eventWarnings, $warningLists);
+        $attribute = $this->__prepareGenericForView($attribute);
 
         /* warning */
         if ($filterType) {
@@ -4824,9 +4814,7 @@ class Event extends AppModel
     private function __prepareProposalForView(
         $proposal,
         $correlatedShadowAttributes,
-        $filterType = false,
-        &$eventWarnings,
-        $warningLists
+        $filterType = false
     ) {
         if ($proposal['proposal_to_delete']) {
             $proposal['objectType'] = 'proposal_delete';
@@ -4875,7 +4863,7 @@ class Event extends AppModel
             }
         }
 
-        $proposal = $this->__prepareGenericForView($proposal, $eventWarnings, $warningLists);
+        $proposal = $this->__prepareGenericForView($proposal);
 
         /* warning */
         if ($filterType) {
@@ -4895,8 +4883,6 @@ class Event extends AppModel
         $correlatedAttributes,
         $correlatedShadowAttributes,
         $filterType = false,
-        &$eventWarnings,
-        $warningLists,
         $sightingsData
     ) {
         $object['category'] = $object['meta-category'];
@@ -4912,8 +4898,6 @@ class Event extends AppModel
                     $correlatedAttributes,
                     $correlatedShadowAttributes,
                     false,
-                    $eventWarnings,
-                    $warningLists,
                     $sightingsData
                 );
                 if ($result['include']) {
@@ -5111,11 +5095,8 @@ class Event extends AppModel
         return $include;
     }
 
-    private function __prepareGenericForView(
-        $object,
-        &$eventWarnings,
-        $warningLists
-    ) {
+    private function __prepareGenericForView($object)
+    {
         if ($this->Attribute->isImage($object)) {
             if (!empty($object['data'])) {
                 $object['image'] = $object['data'];
@@ -5143,14 +5124,11 @@ class Event extends AppModel
                 $object['validationIssue'] = true;
             }
         }
-        $object = $this->Warninglist->checkForWarning($object, $eventWarnings, $warningLists);
         return $object;
     }
 
     public function rearrangeEventForView(&$event, $passedArgs = array(), $all = false, $sightingsData=array())
     {
-        $this->Warninglist = ClassRegistry::init('Warninglist');
-        $warningLists = $this->Warninglist->fetchForEventView();
         foreach ($event['Event'] as $k => $v) {
             if (is_array($v)) {
                 $event[$k] = $v;
@@ -5173,8 +5151,6 @@ class Event extends AppModel
             $filterType[$filterType['attributeFilter']] = 1;
         }
 
-        $eventArray = array();
-        $eventWarnings = array();
         $correlatedAttributes = isset($event['RelatedAttribute']) ? array_keys($event['RelatedAttribute']) : array();
         $correlatedShadowAttributes = isset($event['RelatedShadowAttribute']) ? array_keys($event['RelatedShadowAttribute']) : array();
         $event['objects'] = array();
@@ -5184,8 +5160,6 @@ class Event extends AppModel
                 $correlatedAttributes,
                 $correlatedShadowAttributes,
                 $filterType,
-                $eventWarnings,
-                $warningLists,
                 $sightingsData
             );
             if ($result['include']) {
@@ -5198,9 +5172,7 @@ class Event extends AppModel
                 $result = $this->__prepareProposalForView(
                     $proposal,
                     $correlatedShadowAttributes,
-                    $filterType,
-                    $eventWarnings,
-                    $warningLists
+                    $filterType
                 );
                 $event['objects'][] = $result['data'];
             }
@@ -5213,8 +5185,6 @@ class Event extends AppModel
                     $correlatedAttributes,
                     $correlatedShadowAttributes,
                     $filterType,
-                    $eventWarnings,
-                    $warningLists,
                     $sightingsData
                 );
                 if ($result['include']) {
@@ -5260,7 +5230,6 @@ class Event extends AppModel
             }
         }
         $params['total_elements'] = count($event['objects']);
-        $event['Event']['warnings'] = $eventWarnings;
         return $params;
     }
 
