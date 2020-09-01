@@ -4725,8 +4725,8 @@ class Event extends AppModel
         $sightingsData
     ) {
         $attribute['objectType'] = 'attribute';
-        $include = true;
         if ($filterType) {
+            $include = true;
             /* proposal */
             if ($filterType['proposal'] == 0) { // `both`
                 // pass, do not consider as `both` is selected
@@ -4780,6 +4780,19 @@ class Event extends AppModel
             ) {
                 $include = false;
             }
+
+            /* warnings */
+            if ($filterType['warning'] == 0) { // `both`
+                // pass, do not consider as `both` is selected
+            } else if (!empty($attribute['warnings']) || !empty($attribute['validationIssue'])) { // `include only`
+                $include = $include && ($filterType['warning'] == 1);
+            } else { // `exclude`
+                $include = $include && ($filterType['warning'] == 2);
+            }
+
+            if  (!$include) {
+                return null;
+            }
         }
 
         if (!empty($attribute['ShadowAttribute'])) {
@@ -4797,18 +4810,7 @@ class Event extends AppModel
             $attribute['ShadowAttribute'] = $temp;
         }
         $attribute = $this->__prepareGenericForView($attribute);
-
-        /* warning */
-        if ($filterType) {
-            if ($filterType['warning'] == 0) { // `both`
-                // pass, do not consider as `both` is selected
-            } else if (!empty($attribute['warnings']) || !empty($attribute['validationIssue'])) { // `include only`
-                $include = $include && ($filterType['warning'] == 1);
-            } else { // `exclude`
-                $include = $include && ($filterType['warning'] == 2);
-            }
-        }
-        return array('include' => $include, 'data' => $attribute);
+        return $attribute;
     }
 
     private function __prepareProposalForView(
@@ -4886,22 +4888,24 @@ class Event extends AppModel
         $sightingsData
     ) {
         $object['category'] = $object['meta-category'];
-        $proposal['objectType'] = 'object';
 
         $include = empty($filterType['attributeFilter']) || $filterType['attributeFilter'] == 'object' || $filterType['attributeFilter'] == 'all' || $object['meta-category'] === $filterType['attributeFilter'];
+        if (!$include) {
+            return null;
+        }
 
         if (!empty($object['Attribute'])) {
             $temp = array();
-            foreach ($object['Attribute'] as $k => $proposal) {
+            foreach ($object['Attribute'] as $attribute) {
                 $result = $this->__prepareAttributeForView(
-                    $proposal,
+                    $attribute,
                     $correlatedAttributes,
                     $correlatedShadowAttributes,
                     false,
                     $sightingsData
                 );
-                if ($result['include']) {
-                    $temp[] = $result['data'];
+                if ($result) {
+                    $temp[] = $result;
                 }
             }
             $object['Attribute'] = $temp;
@@ -4917,9 +4921,12 @@ class Event extends AppModel
             || $filterType['server'] != 0
         ) {
             $include = $this->__checkObjectByFilter($object, $filterType, $correlatedAttributes, $correlatedShadowAttributes, $sightingsData);
+            if (!$include)  {
+                return null;
+            }
         }
 
-        return array('include' => $include, 'data' => $object);
+        return $object;
     }
 
     private function __checkObjectByFilter($object, $filterType, $correlatedAttributes, $correlatedShadowAttributes, $sightingsData)
@@ -4936,7 +4943,7 @@ class Event extends AppModel
             // pass, do not consider as `both` is selected
         } else if ($filterType['proposal'] == 1 || $filterType['proposal'] == 2) {
             $flagKeep = false;
-            foreach ($object['Attribute'] as $k => $attribute) { // check if object contains at least 1 proposal
+            foreach ($object['Attribute'] as $attribute) { // check if object contains at least 1 proposal
                 if (!empty($attribute['ShadowAttribute'])) {
                     $flagKeep = ($filterType['proposal'] == 1); // keep if proposal are included
                     break;
@@ -4982,14 +4989,14 @@ class Event extends AppModel
             // pass, do not consider as `both` is selected
         } else if ($filterType['correlation'] == 1 || $filterType['correlation'] == 2) {
             $flagKeep = false;
-            foreach ($object['Attribute'] as $k => $attribute) { // check if object contains at least 1 warning
+            foreach ($object['Attribute'] as $attribute) { // check if object contains at least 1 warning
                 if (in_array($attribute['id'], $correlatedAttributes)) {
                     $flagKeep = ($filterType['correlation'] == 1); // keep if correlations are included
                 } else {
                     $flagKeep = ($filterType['correlation'] == 2); // keep if correlations are excluded
                 }
                 if (!$flagKeep && !empty($attribute['ShadowAttribute'])) {
-                    foreach ($attribute['ShadowAttribute'] as $k => $shadowAttribute) {
+                    foreach ($attribute['ShadowAttribute'] as $shadowAttribute) {
                         if (in_array($shadowAttribute['id'], $correlatedShadowAttributes)) {
                             $flagKeep = ($filterType['correlation'] == 1); // keep if correlations are included
                             break;
@@ -5162,8 +5169,8 @@ class Event extends AppModel
                 $filterType,
                 $sightingsData
             );
-            if ($result['include']) {
-                $event['objects'][] = $result['data'];
+            if ($result) {
+                $event['objects'][] = $result;
             }
         }
         unset($event['Attribute']);
@@ -5187,15 +5194,13 @@ class Event extends AppModel
                     $filterType,
                     $sightingsData
                 );
-                if ($result['include']) {
-                    $event['objects'][] = $result['data'];
+                if ($result) {
+                    $event['objects'][] = $result;
                 }
             }
         }
         unset($event['Object']);
         unset($event['ShadowAttribute']);
-        $referencedObjectFields = array('meta-category', 'name', 'uuid', 'id');
-        $objectReferenceCount = 0;
         $referencedByArray = array();
         foreach ($event['objects'] as $object) {
             if (!in_array($object['objectType'], array('attribute', 'object'))) {
