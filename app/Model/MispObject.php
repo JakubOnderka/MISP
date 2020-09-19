@@ -80,7 +80,7 @@ class MispObject extends AppModel
         )
     );
 
-    public function buildFilterConditions($user, &$params)
+    public function buildFilterConditions(array $user, &$params)
     {
         $conditions = $this->buildConditions($user);
         if (isset($params['wildcard'])) {
@@ -93,14 +93,13 @@ class MispObject extends AppModel
             );
             $conditions['AND'][] = array('OR' => $this->Event->set_filter_wildcard_attributes($params, $temp, $options));
         } else {
-            $attribute_conditions = array();
-            $object_conditions = array();
             if (isset($params['ignore'])) {
                 $params['to_ids'] = array(0, 1);
                 $params['published'] = array(0, 1);
             }
             $simple_params = array(
                 'Object' => array(
+                    'uuid' => array('function' => 'set_filter_uuid'),
                     'object_name' => array('function' => 'set_filter_object_name'),
                     'object_template_uuid' => array('function' => 'set_filter_object_template_uuid'),
                     'object_template_version' => array('function' => 'set_filter_object_template_version'),
