@@ -412,7 +412,7 @@
             <div class="correlation-container">
                 <?php
                         foreach ($event['Feed'] as $relatedFeed):
-                            $relatedData = array('Name' => $relatedFeed['name'], 'URL' => $relatedFeed['url'], 'Provider' => $relatedFeed['provider'], 'Source Format' => $relatedFeed['source_format'] == 'misp' ? 'MISP' : $relatedFeed['source_format']);
+                            $relatedData = array('Name' => $relatedFeed['name'], 'Provider' => $relatedFeed['provider'], 'Source Format' => $relatedFeed['source_format'] == 'misp' ? 'MISP' : $relatedFeed['source_format']);
                             $popover = '';
                             foreach ($relatedData as $k => $v) {
                                 $popover .= '<span class=\'bold\'>' . h($k) . '</span>: <span class="blue">' . h($v) . '</span><br />';
@@ -420,7 +420,7 @@
                 ?>
                                 <span style="white-space: nowrap;">
                                     <?php
-                                        if ($relatedFeed ['source_format'] == 'misp'):
+                                        if ($relatedFeed['source_format'] == 'misp'):
                                     ?>
                                             <form action="<?php echo $baseurl; ?>/feeds/previewIndex/<?php echo h($relatedFeed['id']); ?>" method="post" style="margin:0px;">
                                                 <input type="hidden" name="data[Feed][eventid]" value="<?php echo h(json_encode($relatedFeed['event_uuids'], true)); ?>">

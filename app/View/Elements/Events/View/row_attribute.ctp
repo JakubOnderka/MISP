@@ -226,7 +226,7 @@
                 foreach ($object['Feed'] as $feed) {
                     $popover = '';
                     foreach ($feed as $k => $v) {
-                        if ($k == 'id') continue;
+                        if ($k === 'id' || $k === 'url') continue;
                         if (is_array($v)) {
                             foreach ($v as $k2 => $v2) {
                                 $v[$k2] = h($v2);
