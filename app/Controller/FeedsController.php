@@ -976,16 +976,6 @@ class FeedsController extends AppController
 
     public function searchCaches()
     {
-        if (isset($this->passedArgs['pages'])) {
-            $currentPage = $this->passedArgs['pages'];
-        } else {
-            $currentPage = 1;
-        }
-        $urlparams = '';
-        App::uses('CustomPaginationTool', 'Tools');
-        $customPagination = new CustomPaginationTool();
-        $passedArgs = array();
-        $hits = array();
         $value = false;
         if ($this->request->is('post')) {
             if (isset($this->request->data['Feed'])) {
@@ -1002,18 +992,16 @@ class FeedsController extends AppController
         $hits = $this->Feed->searchCaches($value);
         if ($this->_isRest()) {
             return $this->RestResponse->viewData($hits, $this->response->type());
-        } else {
-            $this->set('hits', $hits);
         }
+
+        App::uses('CustomPaginationTool', 'Tools');
+        $customPagination = new CustomPaginationTool();
         $params = $customPagination->createPaginationRules($hits, $this->passedArgs, $this->alias);
+        $params['sort'] = 'Feed.' . $params['sort']; // hack to allow sort by inside value
         $this->params->params['paging'] = array('Feed' => $params);
         $hits = $customPagination->sortArray($hits, $params, true);
-        if (is_array($hits)) {
-            $customPagination->truncateByPagination($hits, $params);
-        }
-        $pageCount = count($hits);
-        $this->set('urlparams', $urlparams);
-        $this->set('passedArgs', json_encode($passedArgs));
-        $this->set('passedArgsArray', $passedArgs);
+        $customPagination->truncateByPagination($hits, $params);
+        $this->set('hits', $hits);
+        $this->set('value', $value);
     }
 }

@@ -26,13 +26,14 @@
                         'button' => __('Filter'),
                         'placeholder' => __('Enter value to search'),
                         'data' => '',
-                        'searchKey' => 'value'
+                        'searchKey' => 'value',
+                        'value' => $value,
                     )
                 )
             ),
             'fields' => array(
                 array(
-                    'name' => __('Id'),
+                    'name' => __('ID'),
                     'sort' => 'id',
                     'class' => 'short',
                     'data_path' => 'Feed.id'
@@ -69,8 +70,7 @@
     echo $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'feeds', 'menuItem' => 'searchCaches'));
 ?>
 <script type="text/javascript">
-    var passedArgsArray = <?php echo $passedArgs; ?>;
-    $(document).ready(function() {
+    $(function() {
         $('#quickFilterButton').click(function() {
             runIndexQuickFilter();
         });

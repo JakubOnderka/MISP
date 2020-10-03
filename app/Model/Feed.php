@@ -1597,95 +1597,118 @@ class Feed extends AppModel
         return $result;
     }
 
-    public function searchCaches($value)
+    private function getCachedFeeds()
     {
-        $value = strtolower(trim($value));
-        $hits = array();
+        $feeds = $this->find('all', array(
+            'conditions' => array(
+                'caching_enabled' => 1
+            ),
+            'recursive' => -1,
+            'fields' => array('Feed.id', 'Feed.name', 'Feed.url', 'Feed.source_format')
+        ));
+        foreach ($feeds as &$feed) {
+            $feed['Feed']['type'] = $feed['Feed']['source_format'] === 'misp' ? 'MISP Feed' : 'Feed';
+        }
+        return $feeds;
+    }
+
+    private function getCachedServersAsFeeds()
+    {
         $this->Server = ClassRegistry::init('Server');
-        $result['Server'] = $this->Server->find('all', array(
+        $servers = $this->Server->find('all', array(
             'conditions' => array(
                 'caching_enabled' => 1
             ),
             'recursive' => -1,
             'fields' => array('Server.id', 'Server.name', 'Server.url')
         ));
-        $redis = $this->setupRedis();
-        if (empty($value) || $redis->sismember('misp:feed_cache:combined', md5($value))) {
-            $feeds = $this->find('all', array(
-                'conditions' => array(
-                    'caching_enabled' => 1
-                ),
-                'recursive' => -1,
-                'fields' => array('Feed.id', 'Feed.name', 'Feed.url', 'Feed.source_format')
-            ));
+        foreach ($servers as &$server) {
+            $server['Server']['type'] = 'MISP Server';
+            $server = ['Feed' => $server['Server']];
+        }
+        return $servers;
+    }
+
+    /**
+     * @param string|false $value
+     * @return array
+     * @throws Exception
+     */
+    public function searchCaches($value)
+    {
+        if ($value === false) { // hack, just return all enable servers and feeds
+            return array_merge($this->getCachedFeeds(), $this->getCachedServersAsFeeds());
+        }
+
+        $redis = $this->setupRedisWithException();
+
+        $value = strtolower(trim($value));
+        $hash = md5($value);
+
+        $redis->pipeline();
+        $redis->sismember('misp:feed_cache:combined', $hash);
+        $redis->sismember('misp:server_cache:combined', $hash);
+        list($feedCacheExists, $serverCacheExists) = $redis->exec();
+
+        $hits = array();
+        if ($feedCacheExists) {
+            $feeds = $this->getCachedFeeds();
             foreach ($feeds as $feed) {
-                if (empty($value) || $redis->sismember('misp:feed_cache:' . $feed['Feed']['id'], md5($value))) {
+                if ($redis->sismember('misp:feed_cache:' . $feed['Feed']['id'], $hash)) {
                     if ($feed['Feed']['source_format'] === 'misp') {
-                        $uuid = $redis->smembers('misp:feed_cache:event_uuid_lookup:' . md5($value));
-                        foreach ($uuid as $k => $url) {
-                            $uuid[$k] = explode('/', $url)[1];
-                        }
-                        $feed['Feed']['uuid'] = $uuid;
-                        if (!empty($feed['Feed']['uuid'])) {
-                            foreach ($feed['Feed']['uuid'] as $uuid) {
-                                $feed['Feed']['direct_urls'][] = array(
-                                    'url' => sprintf(
-                                        '%s/feeds/previewEvent/%s/%s',
-                                        Configure::read('MISP.baseurl'),
-                                        h($feed['Feed']['id']),
-                                        h($uuid)
-                                    ),
-                                    'name' => __('Event %s', $uuid)
-                                );
+                        $uuids = $redis->smembers('misp:feed_cache:event_uuid_lookup:' . $hash);
+                        foreach ($uuids as $url) {
+                            list ($feedId, $uuid) = explode('/', $url);
+                            if ($feedId != $feed['Feed']['id']) {
+                                continue;
                             }
-                        }
-                        $feed['Feed']['type'] = 'MISP Feed';
-                    } else {
-                        $feed['Feed']['type'] = 'Feed';
-                        if (!empty($value)) {
+                            $feed['Feed']['uuid'][] = $uuid;
                             $feed['Feed']['direct_urls'][] = array(
                                 'url' => sprintf(
-                                    '%s/feeds/previewIndex/%s',
+                                    '%s/feeds/previewEvent/%s/%s',
                                     Configure::read('MISP.baseurl'),
-                                    h($feed['Feed']['id'])
+                                    h($feed['Feed']['id']),
+                                    h($uuid)
                                 ),
-                                'name' => __('Feed %s', $feed['Feed']['id'])
+                                'name' => __('Event %s', $uuid)
                             );
                         }
+                    } else {
+                        $feed['Feed']['direct_urls'][] = array(
+                            'url' => sprintf(
+                                '%s/feeds/previewIndex/%s',
+                                Configure::read('MISP.baseurl'),
+                                h($feed['Feed']['id'])
+                            ),
+                            'name' => __('Feed %s', $feed['Feed']['id'])
+                        );
                     }
                     $hits[] = $feed;
                 }
             }
         }
-        if (empty($value) || $redis->sismember('misp:server_cache:combined', md5($value))) {
-            $this->Server = ClassRegistry::init('Server');
-            $servers = $this->Server->find('all', array(
-                'conditions' => array(
-                    'caching_enabled' => 1
-                ),
-                'recursive' => -1,
-                'fields' => array('Server.id', 'Server.name', 'Server.url')
-            ));
+        if ($serverCacheExists) {
+            $servers = $this->getCachedServersAsFeeds();
             foreach ($servers as $server) {
-                if (empty($value) || $redis->sismember('misp:server_cache:' . $server['Server']['id'], md5($value))) {
-                    $uuid = $redis->smembers('misp:server_cache:event_uuid_lookup:' . md5($value));
-                    if (!empty($uuid)) {
-                        foreach ($uuid as $k => $url) {
-                            $uuid[$k] = explode('/', $url)[1];
-                            $server['Server']['direct_urls'][] = array(
-                                'url' => sprintf(
-                                    '%s/servers/previewEvent/%s/%s',
-                                    Configure::read('MISP.baseurl'),
-                                    h($server['Server']['id']),
-                                    h($uuid[$k])
-                                ),
-                                'name' => __('Event %s', h($uuid[$k]))
-                            );
+                if ($redis->sismember('misp:server_cache:' . $server['Feed']['id'], $hash)) {
+                    $uuids = $redis->smembers('misp:server_cache:event_uuid_lookup:' . $hash);
+                    foreach ($uuids as $url) {
+                        list ($feedId, $uuid) = explode('/', $url);
+                        if ($feedId != $server['Feed']['id']) {
+                            continue;
                         }
+                        $server['Feed']['uuid'][] = $uuid;
+                        $server['Feed']['direct_urls'][] = array(
+                            'url' => sprintf(
+                                '%s/servers/previewEvent/%s/%s',
+                                Configure::read('MISP.baseurl'),
+                                h($server['Feed']['id']),
+                                h($uuid)
+                            ),
+                            'name' => __('Event %s', h($uuid))
+                        );
                     }
-                    $server['Server']['uuid'] = $uuid;
-                    $server['Server']['type'] = 'MISP Server';
-                    $hits[] = array('Feed' => $server['Server']);
+                    $hits[] = $server;
                 }
             }
         }
