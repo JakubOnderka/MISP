@@ -5635,8 +5635,9 @@ class Event extends AppModel
 
     public function getSightingData(array $event)
     {
-        $this->Sighting = ClassRegistry::init('Sighting');
         if (!empty($event['Sighting'])) {
+            $this->Sighting = ClassRegistry::init('Sighting');
+
             $sightingsData = array();
             $sparklineData = array();
             $startDates = array();
@@ -5682,7 +5683,6 @@ class Event extends AppModel
                 }
             }
             $csv = array();
-            $today = strtotime(date('Y-m-d', time()));
             foreach ($startDates as $k => $v) {
                 $startDates[$k] = date('Y-m-d', $v);
             }
@@ -5694,18 +5694,8 @@ class Event extends AppModel
                 if (strtotime($startDate) < $range) {
                     $startDate = date('Y-m-d');
                 }
-                $startDate = date('Y-m-d', strtotime("-3 days", strtotime($startDate)));
-                $sighting = $data;
-                for ($date = $startDate; strtotime($date) <= $today; $date = date('Y-m-d', strtotime("+1 day", strtotime($date)))) {
-                    if (!isset($csv[$aid])) {
-                        $csv[$aid] = 'Date,Close\n';
-                    }
-                    if (isset($sighting[$date])) {
-                        $csv[$aid] .= $date . ',' . $sighting[$date] . '\n';
-                    } else {
-                        $csv[$aid] .= $date . ',0\n';
-                    }
-                }
+
+                $csv[$aid] = $this->Sighting->generateCsv($data, $startDate);
             }
             return array(
                     'data' => $sightingsData,

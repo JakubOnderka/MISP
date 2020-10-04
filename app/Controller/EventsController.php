@@ -1405,23 +1405,12 @@ class EventsController extends AppController
             $temp = implode('|', $filters['distribution']);
             $this->__applyQueryString($event, $temp, 'distribution');
         }
-        $modificationMapCSV = 'Date,Close\n';
-        $startDate = array_keys($modificationMap);
-        sort($startDate);
-        $startDate = $startDate[0];
-        $this->set('startDate', $startDate);
-        $today = strtotime(date('Y-m-d', time()));
-        if (($today - 172800) > $startDate) {
-            $startDate = date('Y-m-d', $today - 172800);
-        }
-        for ($date = $startDate; strtotime($date) <= $today; $date = date('Y-m-d', strtotime("+1 day", strtotime($date)))) {
-            if (isset($modificationMap[$date])) {
-                $modificationMapCSV .= $date . ',' . $modificationMap[$date] . '\n';
-            } else {
-                $modificationMapCSV .= $date . ',0\n';
-            }
-        }
+
+        $this->loadModel('Sighting');
+        $modificationMapCSV = $this->Sighting->generateCsv($modificationMap);
         unset($modificationMap);
+        $this->set('modificationMapCSV', $modificationMapCSV);
+
         $sightingsData = $this->Event->getSightingData($event);
         $this->set('sightingsData', $sightingsData);
         $params = $this->Event->rearrangeEventForView($event, $filters, false, $sightingsData);
@@ -1509,7 +1498,6 @@ class EventsController extends AppController
         $this->set('advancedFilteringActiveRules', $advancedFiltering['activeRules']);
         $this->set('defaultFilteringRules', $this->defaultFilteringRules);
         $this->set('mitreAttackGalaxyId', $this->Event->GalaxyCluster->Galaxy->getMitreAttackGalaxyId());
-        $this->set('modificationMapCSV', $modificationMapCSV);
         $this->set('title_for_layout', __('Event #%s', $event['Event']['id']));
     }
 

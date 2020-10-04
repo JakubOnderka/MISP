@@ -875,6 +875,30 @@ class Sighting extends AppModel
     }
 
     /**
+     * @param array $sightings Key is date in string format, value is number events
+     * @param string|null $startDate
+     * @return string
+     */
+    public function generateCsv(array $sightings, $startDate = null)
+    {
+        $todayDate = date('Y-m-d');
+        if ($startDate === null) {
+            $startDate = !empty($sightings) ? min(array_keys($sightings)) : $todayDate;
+        }
+        $startDate = date('Y-m-d', strtotime("-3 days", strtotime($startDate)));
+
+        $csv = 'Date,Close\n';
+        for ($date = $startDate; strtotime($date) <= strtotime($todayDate); $date = date('Y-m-d', strtotime("+1 day", strtotime($date)))) {
+            if (isset($sightings[$date])) {
+                $csv .= $date . ',' . $sightings[$date] . '\n';
+            } else {
+                $csv .= $date . ',0\n';
+            }
+        }
+        return $csv;
+    }
+
+    /**
      * @return int Timestamp
      */
     public function getMaximumRange()
