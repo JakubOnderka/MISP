@@ -1349,8 +1349,7 @@ class EventsController extends AppController
         }
         $this->set('tagConflicts', $tagConflicts);
 
-        $modDate = date("Y-m-d", $event['Event']['timestamp']);
-        $modificationMap = array($modDate => 1);
+        $modificationMap = array($event['Event']['date'] => 1);
 
         foreach ($event['Attribute'] as $k => $attribute) {
             if ($oldest_timestamp == false || $oldest_timestamp > $attribute['timestamp']) {
