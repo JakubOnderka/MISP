@@ -5018,6 +5018,10 @@ class EventsController extends AppController
                             $this->Event->processModuleResultsDataRouter($this->Auth->user(), $event, $eventId, $importComment);
                             return $this->RestResponse->viewData($event, $this->response->type());
                         }
+
+                        $this->loadModel('Warninglist');
+                        $event = $this->Warninglist->attachWarninglistToEvent($event);
+
                         $this->set('event', $event);
                         $this->set('menuItem', 'importResults');
                         $render_name = 'resolved_misp_format';

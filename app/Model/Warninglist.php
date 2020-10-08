@@ -55,6 +55,22 @@ class Warninglist extends AppModel
     }
 
     /**
+     * @param array $event
+     * @return array
+     */
+    public function attachWarninglistToEvent(array $event)
+    {
+        $attributes = &$event['Attribute'];
+        foreach ($event['Object'] as &$object) {
+            foreach ($object['Attribute'] as &$attribute) {
+                $attributes[] = &$attribute;
+            }
+        }
+        $event['warnings'] = $this->attachWarninglistToAttributes($attributes);
+        return $event;
+    }
+
+    /**
      * Attach warninglist matches to attributes or proposals with IDS mark.
      *
      * @param array $attributes

@@ -205,7 +205,16 @@
               <span class="ObjectRelation bold"><?php echo h($attribute['object_relation']); ?></span>:
               <span class="AttributeType"><?php echo h($attribute['type']); ?></span>
             </td>
-            <td class="AttributeValue limitedWidth"><?php echo h($attribute['value']); ?></td>
+            <td class="AttributeValue limitedWidth"><?php
+                echo h($attribute['value']);
+                if (isset($attribute['warnings'])) {
+                    $temp = '';
+                    foreach ($attribute['warnings'] as $warning) {
+                        $temp .= '<span class="bold">' . h($warning['match']) . ':</span> <span class="red">' . h($warning['warninglist_name']) . '</span><br>';
+                    }
+                    echo ' <span aria-label="' . __('warning') . '" role="img" tabindex="0" class="fa fa-exclamation-triangle" data-placement="right" data-toggle="popover" data-content="' . h($temp) . '" data-trigger="hover" data-placement="right">&nbsp;</span>';
+                }
+            ?></td>
             <?php
                 if (in_array($attribute['type'], $typesWithData)) {
                     if (!empty($attribute['data'])) {
@@ -315,7 +324,16 @@
                     }
                 }
           ?>
-          <td class="AttributeValue limitedWidth"><?php echo h($attribute['value']); ?></td>
+          <td class="AttributeValue limitedWidth"><?php
+              echo h($attribute['value']);
+              if (isset($attribute['warnings'])) {
+                  $temp = '';
+                  foreach ($attribute['warnings'] as $warning) {
+                      $temp .= '<span class="bold">' . h($warning['match']) . ':</span> <span class="red">' . h($warning['warninglist_name']) . '</span><br>';
+                  }
+                  echo ' <span aria-label="' . __('warning') . '" role="img" tabindex="0" class="fa fa-exclamation-triangle" data-placement="right" data-toggle="popover" data-content="' . h($temp) . '" data-trigger="hover" data-placement="right">&nbsp;</span>';
+              }
+          ?></td>
           <?php
                 if (in_array($attribute['type'], $typesWithData)) {
                     if (!empty($attribute['data'])) {

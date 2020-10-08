@@ -5543,7 +5543,7 @@ class Event extends AppModel
             $event['Attribute'] = $attributes;
         }
         if (!empty($result['results']['Object'])) {
-            $object = array();
+            $objects = array();
             foreach ($result['results']['Object'] as $tmp_object) {
                 $tmp_object['distribution'] = (isset($tmp_object['distribution']) ? (int)$tmp_object['distribution'] : $defaultDistribution);
                 $tmp_object['sharing_group_id'] = (isset($tmp_object['sharing_group_id']) ? (int)$tmp_object['sharing_group_id'] : 0);
