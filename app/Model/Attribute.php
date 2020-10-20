@@ -1901,10 +1901,8 @@ class Attribute extends AppModel
                 'order' => array(),
             ));
         }
+
         $correlations = array();
-        // Save dummy values instead of real values for 'date' and 'info' column: these values are not used anymore,
-        // but because dropping column in MySQl database require table rebuild and for correlation table
-        // (that can be pretty huge) can take hours. Table structure will be changed in future.
         foreach ($correlatingAttributes as $k => $cA) {
             foreach ($cA as $corr) {
                 if (Configure::read('MISP.deadlock_avoidance')) {
@@ -1919,8 +1917,6 @@ class Attribute extends AppModel
                         'a_distribution' => $corr['Attribute']['distribution'],
                         'sharing_group_id' => $corr['Event']['sharing_group_id'],
                         'a_sharing_group_id' => $corr['Attribute']['sharing_group_id'],
-                        'date' => '1000-01-01', // Dummy value
-                        'info' => '', // Dummy value
                     );
                     $correlations[] = array(
                         'value' => $correlatingValues[$k],
@@ -1933,8 +1929,6 @@ class Attribute extends AppModel
                         'a_distribution' => $a['distribution'],
                         'sharing_group_id' => $event['Event']['sharing_group_id'],
                         'a_sharing_group_id' => $a['sharing_group_id'],
-                        'date' => '1000-01-01', // Dummy value
-                        'info' => '', // Dummy value
                     );
                 } else {
                     $correlations[] = array(
@@ -1948,8 +1942,6 @@ class Attribute extends AppModel
                         $corr['Attribute']['distribution'],
                         $corr['Event']['sharing_group_id'],
                         $corr['Attribute']['sharing_group_id'],
-                        '1000-01-01', // Dummy value
-                        '', // Dummy value
                     );
                     $correlations[] = array(
                         $correlatingValues[$k],
@@ -1962,8 +1954,6 @@ class Attribute extends AppModel
                         $a['distribution'],
                         $event['Event']['sharing_group_id'],
                         $a['sharing_group_id'],
-                        '1000-01-01', // Dummy value
-                        '', // Dummy value
                     );
                 }
             }
@@ -1984,11 +1974,31 @@ class Attribute extends AppModel
             'a_distribution',
             'sharing_group_id',
             'a_sharing_group_id',
-            'date',
-            'info'
         );
-        if (Configure::read('MISP.deadlock_avoidance')) {
+
+        if (!isset($this->Correlation)) {
             $this->Correlation = ClassRegistry::init('Correlation');
+        }
+
+        // In older MISP instances, correlations table contains also date and info columns, that stores information
+        // about correlated event title and date. But because this information can be fetched directly from Event table,
+        // it is not necessary to keep them there. The problem is that these columns are marked as not null, so they must
+        // be filled with value and removing these columns can take long time for big instances. So for new installation
+        // these columns doesn't exists anymore and we don't need to save dummy value into them. Also feel free to remove
+        // them from your instance.
+        $oldSchema = $this->Correlation->schema('date') !== null;
+        if ($oldSchema) {
+            $fields[] = 'date';
+            $fields[] = 'info';
+        }
+
+        if (Configure::read('MISP.deadlock_avoidance')) {
+            if ($oldSchema) {
+                foreach ($correlations as &$correlation) {
+                    $correlation['date'] = '1000-01-01'; // Dummy value
+                    $correlation['info'] = ''; // Dummy value
+                }
+            }
             return $this->Correlation->saveMany($correlations, array(
                 'atomic' => false,
                 'callbacks' => false,
@@ -1997,6 +2007,12 @@ class Attribute extends AppModel
                 'fieldList' => $fields,
             ));
         } else {
+            if ($oldSchema) {
+                foreach ($correlations as &$correlation) {
+                    $correlation[] = '1000-01-01'; // Dummy value
+                    $correlation[] = ''; // Dummy value
+                }
+            }
             $db = $this->getDataSource();
             return $db->insertMulti('correlations', $fields, $correlations);
         }
