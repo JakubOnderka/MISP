@@ -1,11 +1,12 @@
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" lang="<?= Configure::read('Config.language') === 'eng' ? 'en' : Configure::read('Config.language')  ?>">
 <head>
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <?php echo $this->Html->charset(); ?>
-    <meta name="viewport" content="width=device-width" />
+    <link rel="icon" href="<?= $baseurl ?>/img/icon.png">
+    <meta name="viewport" content="width=device-width">
     <title>
-        <?php echo $title_for_layout, ' - '. h(Configure::read('MISP.title_text') ? Configure::read('MISP.title_text') : 'MISP'); ?>
+        <?php echo $title_for_layout, ' - '. h(Configure::read('MISP.title_text') ?: 'MISP'); ?>
     </title>
     <?php
         $css_collection = array(
@@ -35,7 +36,6 @@
             'meta' => 'icon'
         ));
     ?>
-
 </head>
 <body>
     <div id="popover_form" class="ajax_popover_form"></div>
@@ -81,13 +81,13 @@
     echo $this->element('footer');
     echo $this->element('sql_dump');
     ?>
-    <div id = "ajax_success_container" class="ajax_container">
+    <div id="ajax_success_container" class="ajax_container">
         <div id="ajax_success" class="ajax_result ajax_success"></div>
     </div>
-    <div id = "ajax_fail_container" class="ajax_container">
+    <div id="ajax_fail_container" class="ajax_container">
         <div id="ajax_fail" class="ajax_result ajax_fail"></div>
     </div>
-    <div id = "ajax_hidden_container" class="hidden"></div>
+    <div id="ajax_hidden_container" class="hidden"></div>
     <div class="loading">
         <div class="spinner"></div>
         <div class="loadingText"><?php echo __('Loading');?></div>
