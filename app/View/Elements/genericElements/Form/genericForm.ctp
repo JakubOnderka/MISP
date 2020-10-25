@@ -20,7 +20,7 @@
         'default', 'type', 'options', 'placeholder', 'label', 'empty', 'rows', 'div', 'required'
     );
     $fieldsArrayForPersistence = array();
-    $formCreate = $this->Form->create($modelForForm);
+    $formCreate = $this->FormNative->create($modelForForm);
     if (!empty($data['fields'])) {
         foreach ($data['fields'] as $fieldData) {
             if (isset($fieldData['requirements']) && !$fieldData['requirements']) {
@@ -55,7 +55,7 @@
                         $params[$f] = $fieldData[$f];
                     }
                 }
-                $temp = $this->Form->input($fieldData['field'], $params);
+                $temp = $this->FormNative->input($fieldData['field'], $params);
                 $fieldsArrayForPersistence []= $modelForForm . Inflector::camelize($fieldData['field']);
                 if (!empty($fieldData['hidden'])) {
                     $temp = '<span class="hidden">' . $temp . '</span>';
@@ -89,7 +89,7 @@
             $this->Flash->render()
         );
     }
-    $formEnd = $this->Form->end();
+    $formEnd = $this->FormNative->end();
     if (!empty($ajax)) {
         echo sprintf(
             '<div id="genericModal" class="modal hide fade" tabindex="-1" role="dialog" aria-labelledby="genericModalLabel" aria-hidden="true">%s%s%s</div>',

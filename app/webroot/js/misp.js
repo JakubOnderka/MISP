@@ -5113,6 +5113,22 @@ function queryDeprecatedEndpointUsage() {
 
 (function(){
     "use strict";
+
+    function isDateSupported() {
+        var input = document.createElement('input');
+        var value = 'a';
+        input.setAttribute('type', 'date');
+        input.setAttribute('value', value);
+        return (input.value !== value);
+    }
+
+    if (!isDateSupported()) {
+        // Add datepicker to date inputs if browser don't support native datepicker (for example Safari)
+        $("input[type='date']").datepicker({
+            format: 'yyyy-mm-dd',
+        });
+    }
+
     $(".datepicker").datepicker({
         format: 'yyyy-mm-dd',
     });

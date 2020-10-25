@@ -15,8 +15,7 @@
                 ),
                 array(
                     'field' => 'date',
-                    'class' => 'datepicker',
-                    'type' => 'text',
+                    'type' => 'dateNative',
                     'stayInLine' => 1
                 ),
                 array(
