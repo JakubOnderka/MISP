@@ -75,6 +75,15 @@
             !empty($tag['local']) ? 'user' : 'globe-americas'
         );
         if (!empty($tag['Tag']['id'])) {
+            if (isset($tag_taxonomies[$tag['Tag']['id']])) {
+                $predicate = $tag_taxonomies[$tag['Tag']['id']]['TaxonomyPredicate'][0];
+                if (isset($predicate['TaxonomyEntry'])) {
+                    $taxonomyTitle = $predicate['TaxonomyEntry'][0]['expanded'];
+                } else {
+                    $taxonomyTitle = $predicate['expanded'];
+                }
+            }
+
             $span_tag = sprintf(
                 '<a href="%s" style="%s" class="%s" title="%s">%s</a>',
                 sprintf(
@@ -85,7 +94,7 @@
                 ),
                 $aStyle,
                 $aClass,
-                $aText,
+                isset($taxonomyTitle) ? $taxonomyTitle : $aText,
                 isset($aTextModified) ? $aTextModified : $aText
             );
         } else {

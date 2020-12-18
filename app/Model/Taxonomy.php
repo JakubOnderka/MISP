@@ -501,7 +501,7 @@ class Taxonomy extends AppModel
         return $taxonomies;
     }
 
-    public function getTaxonomyForTag($tagName, $metaOnly = false, $fullTaxonomy = False)
+    public function getTaxonomyForTag($tagName, $metaOnly = false, $fullTaxonomy = false)
     {
         if (preg_match('/^[^:="]+:[^:="]+="[^:="]+"$/i', $tagName)) {
             $temp = explode(':', $tagName);
@@ -643,5 +643,38 @@ class Taxonomy extends AppModel
             }
         }
         return $conflictingTaxonomy;
+    }
+
+    /**
+     * @param array $event
+     * @return array Key is tag ID, value is taxonomy data
+     */
+    public function fetchForEventTags(array $event)
+    {
+        $eventTags = [];
+        foreach ($event['EventTag'] as $et) {
+            $eventTags[$et['Tag']['id']] = $et['Tag']['name'];
+        }
+        foreach ($event['Attribute'] as $attribute) {
+            foreach ($attribute['AttributeTag'] as $at) {
+                $eventTags[$at['Tag']['id']] = $at['Tag']['name'];
+            }
+        }
+        foreach ($event['Object'] as $object) {
+            foreach ($object['Attribute'] as $attribute) {
+                foreach ($attribute['AttributeTag'] as $at) {
+                    $eventTags[$at['Tag']['id']] = $at['Tag']['name'];
+                }
+            }
+        }
+
+        $tagTaxonomies = [];
+        foreach ($eventTags as $tagId => $tagName) {
+            $taxonomy = $this->getTaxonomyForTag($tagName);
+            if ($taxonomy) {
+                $tagTaxonomies[$tagId] = $taxonomy;
+            }
+        }
+        return $tagTaxonomies;
     }
 }

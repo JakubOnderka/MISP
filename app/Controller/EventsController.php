@@ -1406,6 +1406,8 @@ class EventsController extends AppController
             }
         }
         $this->set('warningTagConflicts', $warningTagConflicts);
+        $this->set('tag_taxonomies', $this->Taxonomy->fetchForEventTags($event));
+
         $filters['sort'] = 'timestamp';
         $filters['direction'] = 'desc';
         if (isset($filters['distribution'])) {
