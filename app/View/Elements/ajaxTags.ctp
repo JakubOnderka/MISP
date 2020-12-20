@@ -5,7 +5,7 @@
     $searchUrl = '/events/index/searchtag:';
     switch ($scope) {
         case 'event':
-            $id = h($event['Event']['id']);
+            $id = isset($event['Event']['id']) ? h($event['Event']['id']) : null;
             if (!empty($required_taxonomies)) {
                 foreach ($required_taxonomies as $k => $v) {
                     foreach ($tags as $tag) {
