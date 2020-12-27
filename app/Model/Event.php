@@ -1029,7 +1029,7 @@ class Event extends AppModel
         return $data;
     }
 
-    private function __resolveErrorCode($code, &$event, &$server)
+    private function __resolveErrorCode($code, $event, $server)
     {
         $error = false;
         switch ($code) {
@@ -1046,74 +1046,71 @@ class Event extends AppModel
         return $error;
     }
 
-    private function __executeRestfulEventToServer($event, $server, $resourceId, &$newLocation, &$newTextBody, $HttpSocket, $scope)
+    /**
+     * @param array $sightings
+     * @param ServerSync $serverSync
+     * @param array $event
+     * @return bool
+     * @throws JsonException
+     */
+    public function uploadSightingsToServer(array $sightings, ServerSync $serverSync, array $event)
     {
-        $result = $this->restfulEventToServer($event, $server, $resourceId, $newLocation, $newTextBody, $HttpSocket, $scope);
-        if (is_numeric($result)) {
-            $error = $this->__resolveErrorCode($result, $event, $server);
-            if ($error) {
-                return $error . ' Error code: ' . $result;
-            }
+        // TODO: New – check if sightings can be pushed to remote server. This is new behaviour.
+        $event = $this->__prepareForPushToServer($event, $serverSync->getServer());
+        if (is_numeric($event)) {
+            return false;
         }
-        return true;
-    }
 
-    public function uploadSightingsToServer($sightings, $server, $event_uuid, $HttpSocket = null)
-    {
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/sightings/bulkSaveSightings/' . $event_uuid;
         foreach ($sightings as &$sighting) {
             if (!isset($sighting['org_id'])) {
                 $sighting['org_id'] = '0';
             }
         }
-        $data = json_encode($sightings);
-        if (!empty(Configure::read('Security.sync_audit'))) {
-            $pushLogEntry = sprintf(
-                "==============================================================\n\n[%s] Pushing Sightings for Event #%s to Server #%d:\n\n%s\n\n",
-                date("Y-m-d H:i:s"),
-                $event_uuid,
-                $server['Server']['id'],
-                $data
-            );
-            file_put_contents(APP . 'files/scripts/tmp/debug_server_' . $server['Server']['id'] . '.log', $pushLogEntry, FILE_APPEND);
+
+        try {
+            $serverSync->pushSightings($event['Event']['uuid'], $sightings);
+            return true;
+        } catch (Exception $e) {
+            $message = "Error when uploading sightings for event {$event['Event']['uuid']} to remote server #{$serverSync->getServer()['Server']['id']}";
+            $this->logException($message, $e);
+            return false;
         }
-        $response = $HttpSocket->post($uri, $data, $request);
-        return $this->__handleRestfulEventToServerResponse($response, $newLocation, $newTextBody);
     }
 
-    public function uploadEventToServer($event, $server, $HttpSocket = null, $scope = 'events')
+    /**
+     * @param array $event
+     * @param array $server
+     * @param ServerSync|null $serverSync
+     * @return false|int|string
+     * @throws JsonException
+     */
+    public function uploadEventToServer(array $event, array $server, ServerSync $serverSync = null)
     {
-        $this->Server = ClassRegistry::init('Server');
-        $push = $this->Server->checkVersionCompatibility($server['Server']['id'], false, $HttpSocket);
-        if ($scope === 'events' && empty($push['canPush'])) {
-            return 'The remote user is not a sync user - the upload of the event has been blocked.';
-        } elseif ($scope === 'sightings' && empty($push['canPush']) && empty($push['canSight'])) {
-            return 'The remote user is not a sightings user - the upload of the sightings has been blocked.';
+        if (!$serverSync) {
+            $serverSync = $this->setupServerSync($server);
         }
+
+        if (!$serverSync->isSupported(ServerSync::FEATURE_PUSH)) {
+            return 'The remote user is not a sync user - the upload of the event has been blocked.';
+        }
+
         if (!empty($server['Server']['unpublish_event'])) {
             $event['Event']['published'] = 0;
         }
-        $updated = null;
-        $newLocation = $newTextBody = '';
-        $result = $this->__executeRestfulEventToServer($event, $server, null, $newLocation, $newTextBody, $HttpSocket, $scope);
-        if ($result !== true) {
-            return $result;
+
+        $event = $this->__prepareForPushToServer($event, $server);
+        if (is_numeric($event)) {
+            return $event;
         }
-        if (strlen($newLocation)) { // HTTP/1.1 302 Found and Location: http://<newLocation>
-            $result = $this->__executeRestfulEventToServer($event, $server, $newLocation, $newLocation, $newTextBody, $HttpSocket, $scope);
-            if ($result !== true) {
-                return $result;
-            }
-        }
+
         try {
-            $this->jsonDecode($newTextBody);
+            $serverSync->pushEvent($event);
+            return 'Success';
         } catch (Exception $e) {
-            $this->logException("Invalid JSON returned when pushing to remote server {$server['Server']['id']}", $e);
-            return $this->__logUploadResult($server, $event, $newTextBody);
+            $message = "Error when uploading event {$event['Event']['uuid']} to remote server #{$server['Server']['id']}";
+            $this->logException($message, $e);
+            return $this->__resolveErrorCode($e->getCode(), $event, $server);
         }
-        return 'Success';
     }
 
     private function __prepareForPushToServer($event, $server)
@@ -1145,72 +1142,6 @@ class Event extends AppModel
             return 403;
         }
         return $event;
-    }
-
-    private function __getLastUrlPathComponent($urlPath)
-    {
-        if (!empty($urlPath)) {
-            $pieces = explode('/', $urlPath);
-            return '/' . end($pieces);
-        }
-        return '';
-    }
-
-    private function __handleRestfulEventToServerResponse($response, &$newLocation, &$newTextBody)
-    {
-        switch ($response->code) {
-            case '200': // 200 (OK) + entity-action-result
-                $newTextBody = $response->body();
-                return true;
-            case '302': // Found
-                $newLocation = $response->headers['Location'];
-                $newTextBody = $response->body();
-                return true;
-            case '404': // Not Found
-                $newLocation = $response->headers['Location'];
-                $newTextBody = $response->body();
-                return 404;
-            case '405':
-                $newTextBody = $response->body();
-                return 405;
-            case '403': // Not authorised
-                $newTextBody = $response->body();
-                return 403;
-        }
-    }
-
-    // Uploads the event and the associated Attributes to another Server
-    public function restfulEventToServer($event, $server, $urlPath, &$newLocation, &$newTextBody, $HttpSocket = null, $scope)
-    {
-        $event = $this->__prepareForPushToServer($event, $server);
-        if (is_numeric($event)) {
-            return $event;
-        }
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        if ($scope === 'sightings') {
-            $scope .= '/bulkSaveSightings';
-            $urlPath = $event['Event']['uuid'];
-        }
-        $url = $server['Server']['url'];
-        $uri = $url . '/' . $scope . $this->__getLastUrlPathComponent($urlPath);
-        if ($scope === 'event') {
-            // After creating or editing event, it is not necessary to fetch full event
-            $uri .= '/metadata:1';
-        }
-        $data = json_encode($event);
-        if (!empty(Configure::read('Security.sync_audit'))) {
-            $pushLogEntry = sprintf(
-                "==============================================================\n\n[%s] Pushing Event #%d to Server #%d:\n\n%s\n\n",
-                date("Y-m-d H:i:s"),
-                $event['Event']['id'],
-                $server['Server']['id'],
-                $data
-            );
-            file_put_contents(APP . 'files/scripts/tmp/debug_server_' . $server['Server']['id'] . '.log', $pushLogEntry, FILE_APPEND);
-        }
-        $response = $HttpSocket->post($uri, $data, $request);
-        return $this->__handleRestfulEventToServerResponse($response, $newLocation, $newTextBody);
     }
 
     private function __rearrangeEventStructureForSync($event)
@@ -1468,41 +1399,29 @@ class Event extends AppModel
      *
      * @param int $eventId
      * @param array $server
-     * @param null|HttpSocket $HttpSocket
+     * @param null|ServerSync $serverSync
      * @param boolean $metadataOnly, if True, we only retrieve the metadata
      * without attributes and attachments which is much faster
      * @return array
      * @throws Exception
      */
-    public function downloadEventFromServer($eventId, $server, $HttpSocket=null, $metadataOnly=false)
+    public function downloadEventFromServer($eventId, $server, ServerSync $serverSync = null, $metadataOnly = false)
     {
-        $url = $server['Server']['url'];
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
+        if (!$serverSync) {
+            $serverSync = $this->setupServerSync($server);
+        }
         if ($metadataOnly) {
-            $uri = $url . '/events/index';
-            $data = ['eventid' => $eventId];
-            $data = json_encode($data);
-            $response = $HttpSocket->post($uri, $data, $request);
+            return $serverSync->eventIndex(['eventid' => $eventId]);
         } else {
-            $uri = $url . '/events/view/' . $eventId . '/deleted[]:0/deleted[]:1/excludeGalaxy:1';
+            $params = [
+                'deleted' => [0, 1],
+                'excludeGalaxy' => 1,
+            ];
             if (!empty($server['Server']['internal'])) {
-                $uri = $uri . '/excludeLocalTags:1';
+                $params['excludeLocalTags'] = 1;
             }
-            $response = $HttpSocket->get($uri, $data = '', $request);
+            return $serverSync->event($eventId, $params);
         }
-
-        if ($response === false) {
-            throw new Exception("Could not reach '$uri'.");
-        } else if (!$response->isOk()) {
-            throw new Exception("Fetching the '$uri' failed with HTTP error {$response->code}: {$response->reasonPhrase}");
-        }
-
-        $event = json_decode($response->body, true);
-        if ($event === null) {
-            throw new Exception('Could not parse event JSON: ' . json_last_error_msg(), json_last_error());
-        }
-        return $event;
     }
 
     public function quickDelete($event)
@@ -4475,8 +4394,7 @@ class Event extends AppModel
         }
         $uploaded = true;
         $failedServers = array();
-        App::uses('SyncTool', 'Tools');
-        foreach ($servers as &$server) {
+        foreach ($servers as $server) {
             if (
                 ($scope === 'events' &&
                     (!isset($server['Server']['internal']) || !$server['Server']['internal']) && $event['Event']['distribution'] < 2) ||
@@ -4485,8 +4403,7 @@ class Event extends AppModel
             ) {
                 continue;
             }
-            $syncTool = new SyncTool();
-            $HttpSocket = $syncTool->setupHttpSocket($server);
+            $serverSync = $this->setupServerSync($server);
             // Skip servers where the event has come from.
             if (($passAlong != $server['Server']['id'])) {
                 $params = array();
@@ -4520,7 +4437,7 @@ class Event extends AppModel
                     );
                     $sightings = $this->Sighting->attachToEvent($event, $fakeSyncUser, null, false, true);
                     if (!empty($sightings)) {
-                        $thisUploaded = $this->uploadSightingsToServer($sightings, $server, $event['Event']['uuid'], $HttpSocket);
+                        $thisUploaded = $this->uploadSightingsToServer($sightings, $serverSync, $event);
                     } else {
                         $thisUploaded = true;
                     }
@@ -4531,10 +4448,10 @@ class Event extends AppModel
                             'perm_site_admin' => 0
                         )
                     );
-                    $this->Server->syncGalaxyClusters($HttpSocket, $server, $fakeSyncUser, $technique=$event['Event']['id'], $event=$event);
-                    $thisUploaded = $this->uploadEventToServer($event, $server, $HttpSocket, $scope);
+                    $this->Server->syncGalaxyClusters($serverSync, $server, $fakeSyncUser, $technique=$event['Event']['id'], $event=$event);
+                    $thisUploaded = $this->uploadEventToServer($event, $server, $serverSync);
                     if (isset($this->data['ShadowAttribute'])) {
-                        $this->Server->syncProposals($HttpSocket, $server, null, $id, $this);
+                        $this->Server->syncProposals($serverSync, $server, null, $id, $this);
                     }
                 }
                 if (!$thisUploaded) {

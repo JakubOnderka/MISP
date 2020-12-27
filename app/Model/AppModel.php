@@ -2697,6 +2697,19 @@ class AppModel extends Model
         return true;
     }
 
+    /**
+     * @param array $server
+     * @param int|null $timeout
+     * @return ServerSync
+     * @throws JsonException
+     */
+    public function setupServerSync(array $server, $timeout = null)
+    {
+        App::uses('ServerSync', 'Tools');
+        $request = $this->setupSyncRequest($server);
+        return new ServerSync($server, $request, $timeout);
+    }
+
     public function setupHttpSocket($server, $HttpSocket = null, $timeout = false)
     {
         if (empty($HttpSocket)) {

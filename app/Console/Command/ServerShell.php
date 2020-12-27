@@ -171,10 +171,7 @@ class ServerShell extends AppShell
         if (!$server) {
             die("Remote server with ID $serverId not found");
         }
-        App::uses('SyncTool', 'Tools');
-        $syncTool = new SyncTool();
-        $HttpSocket = $syncTool->setupHttpSocket($server);
-        $result = $this->Server->push($serverId, $technique, $jobId, $HttpSocket, $user);
+        $result = $this->Server->push($serverId, $technique, $jobId, $user);
 
         if ($result !== true && !is_array($result)) {
             $message = 'Job failed. Reason: ' . $result;
@@ -541,10 +538,7 @@ class ServerShell extends AppShell
             );
             $this->Job->save($data);
             $jobId = $this->Job->id;
-            App::uses('SyncTool', 'Tools');
-            $syncTool = new SyncTool();
-            $HttpSocket = $syncTool->setupHttpSocket($server);
-            $this->Server->push($server['Server']['id'], 'full', $jobId, $HttpSocket, $user);
+            $this->Server->push($server['Server']['id'], 'full', $jobId, $user);
         }
         $this->Task->id = $task['Task']['id'];
         $this->Task->saveField('message', count($servers) . ' job(s) completed at ' . date('d/m/Y - H:i:s') . '.');

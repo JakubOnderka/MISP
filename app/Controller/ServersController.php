@@ -788,11 +788,7 @@ class ServersController extends AppController
             throw new MethodNotAllowedException(__('You are not authorised to do that.'));
         }
         if (!Configure::read('MISP.background_jobs')) {
-            $server = $this->Server->read(null, $id);
-            App::uses('SyncTool', 'Tools');
-            $syncTool = new SyncTool();
-            $HttpSocket = $syncTool->setupHttpSocket($server);
-            $result = $this->Server->push($id, $technique, false, $HttpSocket, $this->Auth->user());
+            $result = $this->Server->push($id, $technique, false, $this->Auth->user());
             if ($result === false) {
                 $error = __('The remote server is too outdated to initiate a push towards it. Please notify the hosting organisation of the remote instance.');
             } elseif (!is_array($result)) {
@@ -1658,11 +1654,7 @@ class ServersController extends AppController
             throw new NotFoundException(__('Invalid server'));
         }
         $user = $this->Server->getRemoteUser($id);
-        if (empty($user)) {
-            throw new NotFoundException(__('Invalid user or user not found.'));
-        } else {
-            return $this->RestResponse->viewData($user);
-        }
+        return $this->RestResponse->viewData($user);
     }
 
     public function testConnection($id = false)

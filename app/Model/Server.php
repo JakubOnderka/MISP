@@ -2616,16 +2616,16 @@ class Server extends AppModel
      * @param bool $force
      * @return array
      */
-    private function __getEventIdListBasedOnPullTechnique($technique, array $server, $force = false)
+    private function __getEventIdListBasedOnPullTechnique($technique, array $server, $force = false, ServerSync $serverSync)
     {
         try {
             if ("full" === $technique) {
                 // get a list of the event_ids on the server
-                $eventIds = $this->getEventIdsFromServer($server, false, null, false, 'events', $force);
+                $eventIds = $this->getEventIdsFromServer($serverSync, false, false, 'events', $force);
                 // reverse array of events, to first get the old ones, and then the new ones
                 return array_reverse($eventIds);
             } elseif ("update" === $technique) {
-                $eventIds = $this->getEventIdsFromServer($server, false, null, true, 'events', $force);
+                $eventIds = $this->getEventIdsFromServer($serverSync, false, true, 'events', $force);
                 $eventModel = ClassRegistry::init('Event');
                 $localEventUuids = $eventModel->find('column', array(
                     'fields' => array('Event.uuid'),
@@ -2638,7 +2638,7 @@ class Server extends AppModel
             } else {
                 return array('error' => array(4, null));
             }
-        } catch (HttpException $e) {
+        } catch (HttpClientException $e) {
             $this->logException("Could not fetch event IDs from server {$server['Server']['name']}", $e);
             if ($e->getCode() === 403) {
                 return array('error' => array(1, null));
@@ -2806,10 +2806,10 @@ class Server extends AppModel
         }
     }
 
-    private function __pullEvent($eventId, &$successes, &$fails, $eventModel, $server, $user, $jobId, $force = false)
+    private function __pullEvent(ServerSync $serverSync, $eventId, &$successes, &$fails, $eventModel, $server, $user, $jobId, $force = false)
     {
         try {
-            $event = $eventModel->downloadEventFromServer($eventId, $server);
+            $event = $eventModel->downloadEventFromServer($eventId, $server, $serverSync);
         } catch (Exception $e) {
             $this->logException('Failed downloading the event ' . $eventId, $e);
             $fails[$eventId] = __('failed downloading the event');
@@ -2835,35 +2835,32 @@ class Server extends AppModel
 
     public function pull($user, $id = null, $technique=false, $server, $jobId = false, $force = false)
     {
+        /** @var Job $job */
+        $job = ClassRegistry::init('Job');
+
         if ($jobId) {
-            $job = ClassRegistry::init('Job');
-            $job->read(null, $jobId);
             $email = "Scheduled job";
         } else {
+            $jobId = null;
             $email = $user['email'];
         }
-        $server['Server']['version'] = $this->getRemoteVersion($id);
+
+        $serverSync = $this->setupServerSync($server);
+
         $pulledClusters = 0;
         if (!empty($server['Server']['pull_galaxy_clusters'])) {
             $this->GalaxyCluster = ClassRegistry::init('GalaxyCluster');
-            if ($jobId) {
-                $job->saveField('message', $technique == 'pull_relevant_clusters' ? __('Pulling relevant galaxy clusters.') : __('Pulling galaxy clusters.'));
-            }
-            $pulledClusters = $this->GalaxyCluster->pullGalaxyClusters($user, $server, $technique);
-            if ($technique == 'pull_relevant_clusters') {
-                if ($jobId) {
-                    $job->saveField('progress', 100);
-                    $job->saveField('message', 'Pulling complete.');
-                }
+            $job->saveProgress($jobId, $technique == 'pull_relevant_clusters' ? __('Pulling relevant galaxy clusters.') : __('Pulling galaxy clusters.'));
+            $pulledClusters = $this->GalaxyCluster->pullGalaxyClusters($user, $server, $technique, $serverSync);
+            if ($technique === 'pull_relevant_clusters') {
+                $job->saveStatus($jobId, true, __('Pulling complete.'));
                 return array(array(), array(), 0, 0, $pulledClusters);
             }
-            if ($jobId) {
-                $job->saveField('progress', 10);
-                $job->saveField('message', 'Pulling events.');
-            }
+            $job->saveProgress($jobId, __('Pulling events.'), 10);
         }
+        /** @var Event $eventModel */
         $eventModel = ClassRegistry::init('Event');
-        $eventIds = $this->__getEventIdListBasedOnPullTechnique($technique, $server, $force);
+        $eventIds = $this->__getEventIdListBasedOnPullTechnique($technique, $server, $force, $serverSync);
         if (!empty($eventIds['error'])) {
             $errors = array(
                 '1' => __('Not authorised. This is either due to an invalid auth key, or due to the sync user not having authentication permissions enabled on the remote server. Another reason could be an incorrect sync server setting.'),
@@ -2871,7 +2868,7 @@ class Server extends AppModel
                 '3' => __('Sorry, this is not yet implemented'),
                 '4' => __('Something went wrong while trying to pull')
             );
-            $this->Log = ClassRegistry::init('Log');
+            $this->Log = $this->loadLog();
             $this->Log->create();
             $this->Log->save(array(
                 'org' => $user['Organisation']['name'],
@@ -2890,20 +2887,16 @@ class Server extends AppModel
         // now process the $eventIds to pull each of the events sequentially
         if (!empty($eventIds)) {
             // download each event
-            if ($jobId) {
-                $job->saveProgress($jobId, __n('Pulling %s event.', 'Pulling %s events.', count($eventIds), count($eventIds)));
-            }
+            $job->saveProgress($jobId, __n('Pulling %s event.', 'Pulling %s events.', count($eventIds), count($eventIds)));
             foreach ($eventIds as $k => $eventId) {
-                $this->__pullEvent($eventId, $successes, $fails, $eventModel, $server, $user, $jobId, $force);
-                if ($jobId) {
-                    if ($k % 10 == 0) {
-                        $job->saveProgress($jobId, null, 10 + 40 * (($k + 1) / count($eventIds)));
-                    }
+                $this->__pullEvent($serverSync, $eventId, $successes, $fails, $eventModel, $server, $user, $jobId, $force);
+                if ($jobId && $k % 10 == 0) {
+                    $job->saveProgress($jobId, null, 10 + 40 * (($k + 1) / count($eventIds)));
                 }
             }
         }
         if (!empty($fails)) {
-            $this->Log = ClassRegistry::init('Log');
+            $this->Log = $this->loadLog();
             foreach ($fails as $eventid => $message) {
                 $this->Log->create();
                 $this->Log->save(array(
@@ -2918,20 +2911,14 @@ class Server extends AppModel
                 ));
             }
         }
-        if ($jobId) {
-            $job->saveProgress($jobId, 'Pulling proposals.', 50);
-        }
-        $pulledProposals = $eventModel->ShadowAttribute->pullProposals($user, $server);
+        $job->saveProgress($jobId, __('Pulling proposals.'), 50);
+        $pulledProposals = $eventModel->ShadowAttribute->pullProposals($user, $serverSync);
 
-        if ($jobId) {
-            $job->saveProgress($jobId, 'Pulling sightings.', 75);
-        }
-        $pulledSightings = $eventModel->Sighting->pullSightings($user, $server);
+        $job->saveProgress($jobId, __('Pulling sightings.'), 75);
+        $pulledSightings = $eventModel->Sighting->pullSightings($user, $server, $serverSync);
 
-        if ($jobId) {
-            $job->saveProgress($jobId, 'Pull completed.', 100);
-        }
-        $this->Log = ClassRegistry::init('Log');
+        $job->saveStatus($jobId, true, __('Pull completed.'));
+        $this->Log = $this->loadLog();
         $this->Log->create();
         $this->Log->save(array(
             'org' => $user['Organisation']['name'],
@@ -2988,77 +2975,37 @@ class Server extends AppModel
     }
 
     /**
-     * @param HttpSocket $HttpSocket
-     * @param array $request
-     * @param array $server
-     * @param array $filterRules
-     * @return array
-     * @throws JsonException
-     */
-    private function __orgRuleDowngrade(HttpSocket $HttpSocket, array $request, array $server, array $filterRules)
-    {
-        $uri = $server['Server']['url'] . '/servers/getVersion';
-        $version_response = $HttpSocket->get($uri, false, $request);
-        $version = $this->jsonDecode($version_response->body)['version'];
-        $version = explode('.', $version);
-        if ($version[0] <= 2 && $version[1] <= 4 && $version[0] <= 123) {
-            $filterRules['org'] = implode('|', $filterRules['org']);
-        }
-        return $filterRules;
-    }
-
-    /**
      * fetchCustomClusterIdsFromServer Fetch custom-published remote clusters' UUIDs and versions
      *
-     * @param  array $server
-     * @param  mixed $HttpSocket
-     * @param  array $conditions
-     * @return mixed The list of clusters or the error
+     * @param ServerSync $serverSync
+     * @param array $conditions
+     * @return array The list of clusters
+     * @throws HttpClientException
+     * @throws HttpClientJsonException
      */
-    public function fetchCustomClusterIdsFromServer(array $server, $HttpSocket=null, array $conditions=array())
+    public function fetchCustomClusterIdsFromServer(ServerSync $serverSync, array $conditions=array())
     {
-        $url = $server['Server']['url'];
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        $uri = $url . '/galaxy_clusters/restSearch';
-        $filterRules['published'] = 1;
-        $filterRules['minimal'] = 1;
-        $filterRules['custom'] = 1;
+        $filterRules = [
+            'published' => 1,
+            'minimal' => 1,
+            'custom' => 1,
+        ];
         $filterRules = array_merge($filterRules, $conditions);
-        try {
-            $response = $HttpSocket->post($uri, json_encode($filterRules), $request);
-            if ($response->isOk()) {
-                $clusterArray = json_decode($response->body, true);
-                if (isset($clusterArray['response'])) {
-                    $clusterArray = $clusterArray['response'];
-                }
-                return $clusterArray;
-            }
-
-            if ($response->code == '403') {
-                return 403;
-            }
-        } catch (SocketException $e) {
-            return $e->getMessage();
-        }
-
-        // error, so return error message, since that is handled and everything is expecting an array
-        return __('Error: got response code %s', $response->code);
+        return $serverSync->galaxyClusterSearch($filterRules);
     }
 
     /**
      * getElligibleClusterIdsFromServerForPull Get a list of cluster IDs that are present on the remote server and returns clusters that should be pulled
      *
-     * @param  array $server
-     * @param  mixed $HttpSocket
+     * @param  ServerSync $serverSync
      * @param  bool  $onlyUpdateLocalCluster If set to true, only cluster present locally will be returned
      * @param  array $elligibleClusters Array of cluster present locally that could potentially be updated. Linked to $onlyUpdateLocalCluster
      * @param  array $conditions Conditions to be sent to the remote server while fetching accessible clusters IDs
      * @return array List of cluster IDs to be pulled
      */
-    public function getElligibleClusterIdsFromServerForPull(array $server, $HttpSocket=null, $onlyUpdateLocalCluster=true, array $elligibleClusters=array(), array $conditions=array())
+    public function getElligibleClusterIdsFromServerForPull(ServerSync $serverSync, $onlyUpdateLocalCluster=true, array $elligibleClusters=array(), array $conditions=array())
     {
-        $clusterArray = $this->fetchCustomClusterIdsFromServer($server, $HttpSocket=null, $conditions=$conditions);
+        $clusterArray = $this->fetchCustomClusterIdsFromServer($serverSync, $conditions=$conditions);
         if (!empty($clusterArray)) {
             foreach ($clusterArray as $cluster) {
                 if (isset($elligibleClusters[$cluster['GalaxyCluster']['uuid']])) {
@@ -3080,11 +3027,11 @@ class Server extends AppModel
     }
 
     // Get an array of cluster_ids that are present on the remote server and returns clusters that should be pushed
-    public function getElligibleClusterIdsFromServerForPush($server, $HttpSocket=null, $localClusters=array(), $conditions=array())
+    public function getElligibleClusterIdsFromServerForPush(ServerSync $serverSync, $localClusters=array(), $conditions=array())
     {
-        $clusterArray = $this->fetchCustomClusterIdsFromServer($server, $HttpSocket=null, $conditions=$conditions);
-        $keyedClusterArray = Hash::combine($clusterArray, '{n}.GalaxyCluster.uuid', '{n}.GalaxyCluster.version');
         if (!empty($localClusters)) {
+            $clusterArray = $this->fetchCustomClusterIdsFromServer($serverSync, $conditions=$conditions);
+            $keyedClusterArray = Hash::combine($clusterArray, '{n}.GalaxyCluster.uuid', '{n}.GalaxyCluster.version');
             foreach ($localClusters as $k => $localCluster) {
                 if (isset($keyedClusterArray[$localCluster['GalaxyCluster']['uuid']])) {
                     $remoteVersion = $keyedClusterArray[$localCluster['GalaxyCluster']['uuid']];
@@ -3100,46 +3047,35 @@ class Server extends AppModel
     /**
      * Get an array of event UUIDs that are present on the remote server.
      *
-     * @param array $server
+     * @param ServerSync $serverSync
      * @param bool $all
-     * @param HttpSocket|null $HttpSocket
      * @param bool $ignoreFilterRules
      * @param string $scope 'events' or 'sightings'
      * @param bool $force
      * @return array Array of event UUIDs.
-     * @throws JsonException
-     * @throws InvalidArgumentException
+     * @throws HttpClientException
+     * @throws HttpClientJsonException
      */
-    public function getEventIdsFromServer(array $server, $all = false, HttpSocket $HttpSocket = null, $ignoreFilterRules = false, $scope = 'events', $force = false)
+    public function getEventIdsFromServer(ServerSync $serverSync, $all = false, $ignoreFilterRules = false, $scope = 'events', $force = false)
     {
-        if (!in_array($scope, array('events', 'sightings'))) {
+        if (!in_array($scope, ['events', 'sightings'], true)) {
             throw new InvalidArgumentException("Scope mus be 'events' or 'sightings', '$scope' given.");
         }
 
         if ($ignoreFilterRules) {
             $filterRules = array();
         } else {
-            $filterRules = $this->filterRuleToParameter($server['Server']['pull_rules']);
+            $filterRules = $this->filterRuleToParameter($serverSync->getServer()['Server']['pull_rules']);
         }
 
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        if (!empty($filterRules['org'])) {
-            $filterRules = $this->__orgRuleDowngrade($HttpSocket, $request, $server, $filterRules);
+        if (!empty($filterRules['org']) && !$serverSync->isSupported(ServerSync::ORG_RULE_AS_ARRAY)) {
+            $filterRules['org'] = implode('|', $filterRules['org']);
         }
         $filterRules['minimal'] = 1;
         $filterRules['published'] = 1;
 
-        $uri = $server['Server']['url'] . '/events/index';
-        $response = $HttpSocket->post($uri, json_encode($filterRules), $request);
-        if ($response === false) {
-            throw new Exception("Could not reach '$uri'.");
-        }
-        if (!$response->isOk()) {
-            throw new HttpException("Fetching the '$uri' failed with HTTP error {$response->code}: {$response->reasonPhrase}", intval($response->code));
-        }
+        $eventArray = $serverSync->eventIndex($filterRules);
 
-        $eventArray = $this->jsonDecode($response->body);
         // correct $eventArray if just one event
         if (isset($eventArray['id'])) {
             $eventArray = array($eventArray);
@@ -3209,12 +3145,11 @@ class Server extends AppModel
      * @param int $id Server ID
      * @param string|int $technique Can be 'full', 'incremental' or event ID
      * @param int|false $jobId
-     * @param HttpSocket $HttpSocket
      * @param array $user
      * @return array|bool
      * @throws Exception
      */
-    public function push($id, $technique, $jobId = false, $HttpSocket, array $user)
+    public function push($id, $technique, $jobId = false, array $user)
     {
         if ($jobId) {
             $job = ClassRegistry::init('Job');
@@ -3223,9 +3158,11 @@ class Server extends AppModel
         if (!$server) {
             throw new NotFoundException('Server not found');
         }
+        $serverSync = $this->setupServerSync($server);
+
         $this->Event = ClassRegistry::init('Event');
         $url = $server['Server']['url'];
-        $push = $this->checkVersionCompatibility($id, $user);
+        $push = $this->checkVersionCompatibility($serverSync, $user);
         if (is_array($push) && !$push['canPush'] && !$push['canSight']) {
             $push = 'Remote instance is outdated or no permission to push.';
         }
@@ -3267,7 +3204,7 @@ class Server extends AppModel
 
             // sync custom galaxy clusters if user is capable
             if ($push['canEditGalaxyCluster'] && $server['Server']['push_galaxy_clusters'] && "full" == $technique) {
-                $clustersSuccesses = $this->syncGalaxyClusters($HttpSocket, $this->data, $user, $technique='full');
+                $clustersSuccesses = $this->syncGalaxyClusters($serverSync, $server, $user, $technique='full');
             } else {
                 $clustersSuccesses = array();
             }
@@ -3316,7 +3253,7 @@ class Server extends AppModel
                     'fields' => array('Event.id', 'Event.timestamp', 'Event.sighting_timestamp', 'Event.uuid', 'Event.orgc_id'), // array of field names
             );
             $eventIds = $this->Event->find('all', $findParams);
-            $eventUUIDsFiltered = $this->getEventIdsForPush($id, $HttpSocket, $eventIds, $user);
+            $eventUUIDsFiltered = $this->getEventIdsForPush($server, $serverSync, $eventIds);
             if (!empty($eventUUIDsFiltered)) {
                 $eventCount = count($eventUUIDsFiltered);
                 // now process the $eventIds to push each of the events sequentially
@@ -3345,11 +3282,11 @@ class Server extends AppModel
                     $event = $event[0];
                     $event['Event']['locked'] = 1;
                     if ($push['canEditGalaxyCluster'] && $server['Server']['push_galaxy_clusters'] && "full" != $technique) {
-                        $clustersSuccesses = $this->syncGalaxyClusters($HttpSocket, $this->data, $user, $technique=$event['Event']['id'], $event=$event);
+                        $clustersSuccesses = $this->syncGalaxyClusters($serverSync, $server, $user, $technique=$event['Event']['id'], $event=$event);
                     } else {
                         $clustersSuccesses = array();
                     }
-                    $result = $this->Event->uploadEventToServer($event, $server, $HttpSocket);
+                    $result = $this->Event->uploadEventToServer($event, $server, $serverSync);
                     if ('Success' === $result) {
                         $successes[] = $event['Event']['id'];
                     } else {
@@ -3371,11 +3308,11 @@ class Server extends AppModel
                 $server['Server']['lastpushedid'] = $lastpushedid;
                 $this->save($server);
             }
-            $this->syncProposals($HttpSocket, $server, null, null, $this->Event);
+            $this->syncProposals($serverSync, $server, null, null, $this->Event);
         }
 
         if ($push['canPush'] || $push['canSight']) {
-            $sightingSuccesses = $this->syncSightings($HttpSocket, $server, $user, $this->Event);
+            $sightingSuccesses = $this->syncSightings($serverSync, $server, $user, $this->Event);
         } else {
             $sightingSuccesses = array();
         }
@@ -3389,18 +3326,10 @@ class Server extends AppModel
             $fails = array();
         }
 
-        $this->Log = ClassRegistry::init('Log');
-        $this->Log->create();
-        $this->Log->save(array(
-                'org' => $user['Organisation']['name'],
-                'model' => 'Server',
-                'model_id' => $id,
-                'email' => $user['email'],
-                'action' => 'push',
-                'user_id' => $user['id'],
-                'title' => 'Push to ' . $url . ' initiated by ' . $user['email'],
-                'change' => count($successes) . ' events pushed or updated. ' . count($fails) . ' events failed or didn\'t need an update.'
-        ));
+        $title = 'Push to ' . $url . ' initiated by ' . $user['email'];
+        $change = count($successes) . ' events pushed or updated. ' . count($fails) . ' events failed or didn\'t need an update.';
+        $this->loadLog()->createLogEntry($user, 'push', 'Server', $id, $title, $change);
+
         if ($jobId) {
             $job->saveStatus($jobId, true, __('Push to server %s complete.', $id));
         } else {
@@ -3409,42 +3338,34 @@ class Server extends AppModel
         return true;
     }
 
-    public function getEventIdsForPush($id, $HttpSocket, $eventIds, $user)
+    private function getEventIdsForPush(array $server, ServerSync $serverSync, array $events)
     {
-        $server = $this->read(null, $id);
-        $this->Event = ClassRegistry::init('Event');
-
-        foreach ($eventIds as $k => $event) {
+        foreach ($events as $k => $event) {
             if (empty($this->eventFilterPushableServers($event, array($server)))) {
-                unset($eventIds[$k]);
+                unset($events[$k]);
                 continue;
             }
-            unset($eventIds[$k]['Event']['id']);
         }
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        $data = json_encode($eventIds);
-        $uri = $server['Server']['url'] . '/events/filterEventIdsForPush';
-        $response = $HttpSocket->post($uri, $data, $request);
-        if ($response->code == '200') {
-            $uuidList = json_decode($response->body());
-        } else {
+
+        try {
+            return $serverSync->filterEventIdsForPush($events);
+        } catch (Exception $e) {
+            $this->logException("Could not filter event IDs for push to server #{$server['Server']['id']}.", $e);
             return false;
         }
-        return $uuidList;
     }
 
     /**
      * syncGalaxyClusters Push elligible clusters depending on the provided technique
      *
-     * @param  mixed $HttpSocket
+     * @param  ServerSync $serverSync
      * @param  array $server
      * @param  array $user
      * @param  string|int $technique Either the 'full' string or the event id
      * @param  bool  $event
      * @return array List of successfully pushed clusters
      */
-    public function syncGalaxyClusters($HttpSocket, array $server, array $user, $technique='full', $event=false)
+    public function syncGalaxyClusters(ServerSync $serverSync, array $server, array $user, $technique='full', $event=false)
     {
         $successes = array();
         if (!$server['Server']['push_galaxy_clusters']) {
@@ -3452,7 +3373,6 @@ class Server extends AppModel
         }
         $this->GalaxyCluster = ClassRegistry::init('GalaxyCluster');
         $this->Event = ClassRegistry::init('Event');
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
         $clusters = array();
         if ($technique == 'full') {
             $clusters = $this->GalaxyCluster->getElligibleClustersToPush($user, $conditions=array(), $full=true);
@@ -3466,9 +3386,9 @@ class Server extends AppModel
             }
         }
         $localClusterUUIDs = Hash::extract($clusters, '{n}.GalaxyCluster.uuid');
-        $clustersToPush = $this->getElligibleClusterIdsFromServerForPush($server, $HttpSocket=$HttpSocket, $localClusters=$clusters, $conditions=array('uuid' => $localClusterUUIDs));
+        $clustersToPush = $this->getElligibleClusterIdsFromServerForPush($serverSync, $localClusters=$clusters, $conditions=array('uuid' => $localClusterUUIDs));
         foreach ($clustersToPush as $k => $cluster) {
-            $result = $this->GalaxyCluster->uploadClusterToServer($cluster, $server, $HttpSocket, $user);
+            $result = $this->GalaxyCluster->uploadClusterToServer($cluster, $server, $serverSync, $user);
             if ($result === 'Success') {
                 $successes[] = __('GalaxyCluster %s', $cluster['GalaxyCluster']['uuid']);
             }
@@ -3476,29 +3396,28 @@ class Server extends AppModel
         return $successes;
     }
 
-    public function syncSightings($HttpSocket, $server, $user, $eventModel)
+    public function syncSightings(ServerSync $serverSync, $server, $user, Event $eventModel)
     {
         $successes = array();
         if (!$server['Server']['push_sightings']) {
             return $successes;
         }
         $this->Sighting = ClassRegistry::init('Sighting');
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
         try {
-            $eventIds = $this->getEventIdsFromServer($server, true, $HttpSocket, true, 'sightings');
+            $eventIds = $this->getEventIdsFromServer($serverSync, true, true, 'sightings');
         } catch (Exception $e) {
             $this->logException("Could not fetch event IDs from server {$server['Server']['name']}", $e);
             return $successes;
         }
         // now process the $eventIds to push each of the events sequentially
         // check each event and push sightings when needed
-        foreach ($eventIds as $k => $eventId) {
+        foreach ($eventIds as $eventId) {
             $event = $eventModel->fetchEvent($user, $options = array('event_uuid' => $eventId, 'metadata' => true));
             if (!empty($event)) {
                 $event = $event[0];
-                $event['Sighting'] = $this->Sighting->attachToEvent($event, $user, null, false, true);
-                $result = $eventModel->uploadEventToServer($event, $server, $HttpSocket, 'sightings');
-                if ($result === 'Success') {
+                $sightings = $this->Sighting->attachToEvent($event, $user, null, false, true);
+                $result = $eventModel->uploadSightingsToServer($sightings, $server, $event);
+                if ($result) {
                     $successes[] = 'Sightings for event ' .  $event['Event']['id'];
                 }
             }
@@ -3506,15 +3425,14 @@ class Server extends AppModel
         return $successes;
     }
 
-    public function syncProposals($HttpSocket, array $server, $sa_id = null, $event_id = null, $eventModel)
+    public function syncProposals(ServerSync $serverSync, array $server, $sa_id = null, $event_id = null, Event $eventModel)
     {
         $saModel = ClassRegistry::init('ShadowAttribute');
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
         if ($sa_id == null) {
             if ($event_id == null) {
                 // event_id is null when we are doing a push
                 try {
-                    $ids = $this->getEventIdsFromServer($server, true, $HttpSocket, true);
+                    $ids = $this->getEventIdsFromServer($serverSync, true, true);
                 } catch (Exception $e) {
                     $this->logException("Could not fetch event IDs from server {$server['Server']['name']}", $e);
                     return false;
@@ -3525,10 +3443,10 @@ class Server extends AppModel
                 // event_id is not null when we are doing a publish
             }
             $events = $eventModel->find('all', array(
-                    'conditions' => $conditions,
-                    'recursive' => 1,
-                    'contain' => 'ShadowAttribute',
-                    'fields' => array('Event.uuid')
+                'conditions' => $conditions,
+                'recursive' => 1,
+                'contain' => 'ShadowAttribute',
+                'fields' => array('Event.uuid')
             ));
 
             $fails = 0;
@@ -3543,12 +3461,8 @@ class Server extends AppModel
                         unset($sa['value2']);
                     }
 
-                    $data = json_encode($event['ShadowAttribute']);
-                    $request = $this->setupSyncRequest($server);
-                    $uri = $server['Server']['url'] . '/events/pushProposals/' . $event['Event']['uuid'];
-                    $response = $HttpSocket->post($uri, $data, $request);
-                    if ($response->code == '200') {
-                        $result = json_decode($response->body(), true);
+                    try {
+                        $result = $serverSync->pushProposals($event['Event']['uuid'], $event['ShadowAttribute']);
                         if ($result['success']) {
                             $success += intval($result['counter']);
                         } else {
@@ -3559,19 +3473,14 @@ class Server extends AppModel
                                 $error_message .= " --- " . $result['message'];
                             }
                         }
-                    } else {
+                    } catch (Exception $e) {
                         $fails++;
+                        $this->logException("Could not push sightings to remote server {$server['Server']['id']}", $e);
                     }
                 }
             }
         } else {
-            // connect to checkuuid($uuid)
-            $request = $this->setupSyncRequest($server);
-            $uri = $server['Server']['url'] . '/events/checkuuid/' . $sa_id;
-            $response = $HttpSocket->get($uri, '', $request);
-            if ($response->code != '200') {
-                return false;
-            }
+            // TODO: What to do here?
         }
         return true;
     }
@@ -4655,7 +4564,7 @@ class Server extends AppModel
     /**
      * @param array $server
      * @return array
-     * @throws JsonException
+     * @throws Exception
      */
     public function runConnectionTest(array $server)
     {
@@ -4665,65 +4574,45 @@ class Server extends AppModel
             if ($clientCertificate) {
                 $clientCertificate['valid_from'] = $clientCertificate['valid_from'] ? $clientCertificate['valid_from']->format('c') : __('Not defined');
                 $clientCertificate['valid_to'] = $clientCertificate['valid_to'] ? $clientCertificate['valid_to']->format('c') : __('Not defined');
-                $clientCertificate['public_key_size'] = $clientCertificate['public_key_size'] ?: __('Unknwon');
-                $clientCertificate['public_key_type'] = $clientCertificate['public_key_type'] ?: __('Unknwon');
+                $clientCertificate['public_key_size'] = $clientCertificate['public_key_size'] ?: __('Unknown');
+                $clientCertificate['public_key_type'] = $clientCertificate['public_key_type'] ?: __('Unknown');
             }
         } catch (Exception $e) {
             $clientCertificate = ['error' => $e->getMessage()];
         }
 
-        $HttpSocket = $this->setupHttpSocket($server, null, 5);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/servers/getVersion';
-
         try {
-            $response = $HttpSocket->get($uri, false, $request);
-            if ($response === false) {
-                throw new Exception("Connection failed for unknown reason.");
+            $info = $this->setupServerSync($server)->getVersion();
+            return array('status' => 1, 'info' => $info, 'client_certificate' => $clientCertificate);
+        } catch (HttpClientJsonException $e) {
+            $logTitle = 'Error: Connection test failed. Returned data is in the change field.';
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle, [
+                'response' => ['', $e->getResponse()->body],
+                'response-code' => ['', $e->getResponse()->code],
+            ]);
+            return array('status' => 3, 'client_certificate' => $clientCertificate);
+        } catch (HttpClientException $e) {
+            if ($e->getCode() === 403) {
+                return array('status' => 4, 'client_certificate' => $clientCertificate);
             }
+
+            $logTitle = 'Error: Connection test failed. Returned data is in the change field.';
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle, [
+                'response' => ['', $e->getResponse()->body],
+                'response-code' => ['', $e->getResponse()->code],
+            ]);
+            return array('status' => 3, 'client_certificate' => $clientCertificate);
         } catch (Exception $e) {
             $logTitle = 'Error: Connection test failed. Reason: ' .  $e->getMessage();
             $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle);
             return array('status' => 2, 'client_certificate' => $clientCertificate);
         }
-
-        if ($response->code == '403') {
-            return array('status' => 4, 'client_certificate' => $clientCertificate);
-        } else if ($response->code == '405') {
-            try {
-                $responseText = $this->jsonDecode($response->body)['message'];
-                if ($responseText === 'Your user account is expecting a password change, please log in via the web interface and change it before proceeding.') {
-                    return array('status' => 5, 'client_certificate' => $clientCertificate);
-                } elseif ($responseText === 'You have not accepted the terms of use yet, please log in via the web interface and accept them.') {
-                    return array('status' => 6, 'client_certificate' => $clientCertificate);
-                }
-            } catch (Exception $e) {
-                // pass
-            }
-        } else if ($response->isOk()) {
-            try {
-                $info = $this->jsonDecode($response->body());
-                if (!isset($info['version'])) {
-                    throw new Exception("Server returns JSON response, but doesn't contain required 'version' field.");
-                }
-                return array('status' => 1, 'info' => $info, 'client_certificate' => $clientCertificate);
-            } catch (Exception $e) {
-                // Even if server returns OK status, that doesn't mean that connection to another MISP instance works
-            }
-        }
-
-        $logTitle = 'Error: Connection test failed. Returned data is in the change field.';
-        $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle, [
-            'response' => ['', $response->body],
-            'response-code' => ['', $response->code],
-        ]);
-        return array('status' => 3, 'client_certificate' => $clientCertificate);
     }
 
     /**
      * @param array $server
      * @return int
-     * @throws JsonException
+     * @throws Exception
      */
     public function runPOSTtest(array $server)
     {
@@ -4731,14 +4620,9 @@ class Server extends AppModel
         if (!$testFile) {
             throw new Exception("Could not load payload for POST test.");
         }
-        $HttpSocket = $this->setupHttpSocket($server);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/servers/postTest';
 
         try {
-            $response = $HttpSocket->post($uri, json_encode(array('testString' => $testFile)), $request);
-            $rawBody = $response->body;
-            $response = $this->jsonDecode($rawBody);
+            $response = $this->setupServerSync($server)->postTest($testFile);
         } catch (Exception $e) {
             $title = 'Error: POST connection test failed. Reason: ' . $e->getMessage();
             $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $title);
@@ -4769,76 +4653,64 @@ class Server extends AppModel
         return 1;
     }
 
-    public function checkVersionCompatibility($id, $user = array(), $HttpSocket = false)
+    /**
+     * @param ServerSync $serverSync
+     * @param array $user
+     * @return array|string
+     * @throws JsonException
+     */
+    public function checkVersionCompatibility(ServerSync $serverSync, $user = array())
     {
         // for event publishing when we don't have a user.
         if (empty($user)) {
             $user = array('Organisation' => array('name' => 'SYSTEM'), 'email' => 'SYSTEM', 'id' => 0);
         }
         $localVersion = $this->checkMISPVersion();
-        $server = $this->find('first', array('conditions' => array('Server.id' => $id)));
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/servers/getVersion';
+
+        $serverId = $serverSync->getServer()['Server']['id'];
         try {
-            $response = $HttpSocket->get($uri, '', $request);
+            $remoteVersion = $serverSync->getVersion();
         } catch (Exception $e) {
-            $error = $e->getMessage();
-        }
-        if (!isset($response) || $response->code != '200') {
-            $this->Log = ClassRegistry::init('Log');
-            $this->Log->create();
-            if (isset($response->code)) {
-                $title = 'Error: Connection to the server has failed.' . (isset($response->code) ? ' Returned response code: ' . $response->code : '');
+            if ($e instanceof HttpClientException) {
+                $title = 'Error: Connection to the server has failed.' . ($e->getCode() ? ' Returned response code: ' . $e->getCode() : '');
             } else {
                 $title = 'Error: Connection to the server has failed. The returned exception\'s error message was: ' . $e->getMessage();
             }
+
+            $this->Log = ClassRegistry::init('Log');
+            $this->Log->create();
             $this->Log->save(array(
-                    'org' => $user['Organisation']['name'],
-                    'model' => 'Server',
-                    'model_id' => $id,
-                    'email' => $user['email'],
-                    'action' => 'error',
-                    'user_id' => $user['id'],
-                    'title' => $title
+                'org' => $user['Organisation']['name'],
+                'model' => 'Server',
+                'model_id' => $serverId,
+                'email' => $user['email'],
+                'action' => 'error',
+                'user_id' => $user['id'],
+                'title' => $title
             ));
             return $title;
         }
-        $remoteVersion = json_decode($response->body, true);
+
         $canPush = isset($remoteVersion['perm_sync']) ? $remoteVersion['perm_sync'] : false;
         $canSight = isset($remoteVersion['perm_sighting']) ? $remoteVersion['perm_sighting'] : false;
         $supportEditOfGalaxyCluster = isset($remoteVersion['perm_galaxy_editor']);
         $canEditGalaxyCluster = isset($remoteVersion['perm_galaxy_editor']) ? $remoteVersion['perm_galaxy_editor'] : false;
         $remoteVersion = explode('.', $remoteVersion['version']);
-        if (!isset($remoteVersion[0])) {
-            $this->Log = ClassRegistry::init('Log');
-            $this->Log->create();
-            $message = __('Error: Server didn\'t send the expected response. This may be because the remote server version is outdated.');
-            $this->Log->save(array(
-                    'org' => $user['Organisation']['name'],
-                    'model' => 'Server',
-                    'model_id' => $id,
-                    'email' => $user['email'],
-                    'action' => 'error',
-                    'user_id' => $user['id'],
-                    'title' => $message,
-            ));
-            return $message;
-        }
+
         $response = false;
         $success = false;
         $issueLevel = "warning";
         if ($localVersion['major'] > $remoteVersion[0]) {
-            $response = "Sync to Server ('" . $id . "') aborted. The remote instance's MISP version is behind by a major version.";
+            $response = "Sync to Server ('$serverId') aborted. The remote instance's MISP version is behind by a major version.";
         }
         if ($response === false && $localVersion['major'] < $remoteVersion[0]) {
-            $response = "Sync to Server ('" . $id . "') aborted. The remote instance is at least a full major version ahead - make sure you update your MISP instance!";
+            $response = "Sync to Server ('$serverId') aborted. The remote instance is at least a full major version ahead - make sure you update your MISP instance!";
         }
         if ($response === false && $localVersion['minor'] > $remoteVersion[1]) {
-            $response = "Sync to Server ('" . $id . "') aborted. The remote instance's MISP version is behind by a minor version.";
+            $response = "Sync to Server ('$serverId') aborted. The remote instance's MISP version is behind by a minor version.";
         }
         if ($response === false && $localVersion['minor'] < $remoteVersion[1]) {
-            $response = "Sync to Server ('" . $id . "') aborted. The remote instance is at least a full minor version ahead - make sure you update your MISP instance!";
+            $response = "Sync to Server ('$serverId') aborted. The remote instance is at least a full minor version ahead - make sure you update your MISP instance!";
         }
 
         // if we haven't set a message yet, we're good to go. We are only behind by a hotfix version
@@ -4848,13 +4720,13 @@ class Server extends AppModel
             $issueLevel = "error";
         }
         if ($response === false && $localVersion['hotfix'] > $remoteVersion[2]) {
-            $response = "Sync to Server ('" . $id . "') initiated, but the remote instance is a few hotfixes behind.";
+            $response = "Sync to Server ('$serverId') initiated, but the remote instance is a few hotfixes behind.";
         }
         if ($response === false && $localVersion['hotfix'] < $remoteVersion[2]) {
-            $response = "Sync to Server ('" . $id . "') initiated, but the remote instance is a few hotfixes ahead. Make sure you keep your instance up to date!";
+            $response = "Sync to Server ('$serverId') initiated, but the remote instance is a few hotfixes ahead. Make sure you keep your instance up to date!";
         }
         if (empty($response) && $remoteVersion[2] < 111) {
-            $response = "Sync to Server ('" . $id . "') initiated, but version 2.4.111 is required in order to be able to pull proposals from the remote side.";
+            $response = "Sync to Server ('$serverId') initiated, but version 2.4.111 is required in order to be able to pull proposals from the remote side.";
         }
 
         if ($response !== false) {
@@ -4863,7 +4735,7 @@ class Server extends AppModel
             $this->Log->save(array(
                     'org' => $user['Organisation']['name'],
                     'model' => 'Server',
-                    'model_id' => $id,
+                    'model_id' => $serverId,
                     'email' => $user['email'],
                     'action' => $issueLevel,
                     'user_id' => $user['id'],
@@ -5867,40 +5739,6 @@ class Server extends AppModel
         ));
     }
 
-    /* returns the version string of a connected instance
-     * error codes:
-     * 1: received non json response
-     * 2: no route to host
-     * 3: empty result set
-     */
-    public function getRemoteVersion($id)
-    {
-        $server = $this->find('first', array(
-                'conditions' => array('Server.id' => $id),
-        ));
-        if (empty($server)) {
-            return 2;
-        }
-        App::uses('SyncTool', 'Tools');
-        $syncTool = new SyncTool();
-        $HttpSocket = $syncTool->setupHttpSocket($server);
-        $request = $this->setupSyncRequest($server);
-        $response = $HttpSocket->get($server['Server']['url'] . '/servers/getVersion', $data = '', $request);
-        if ($response->code == 200) {
-            try {
-                $data = json_decode($response->body, true);
-            } catch (Exception $e) {
-                return 1;
-            }
-            if (isset($data['version']) && !empty($data['version'])) {
-                return $data['version'];
-            } else {
-                return 3;
-            }
-        }
-        return 2;
-    }
-
     /**
      * Returns an array with the events
      * @param int $id
@@ -5920,8 +5758,9 @@ class Server extends AppModel
         }
 
         $relativeUri = '/events/index' . $urlParams;
-        list($events, $response) = $this->serverGetRequest($id, $relativeUri);
+        $response = $this->serverGetRequest($id, $relativeUri);
         $totalCount = $response->getHeader('X-Result-Count') ?: 0;
+        $events = $response->json();
 
         foreach ($events as $k => $event) {
             if (!isset($event['Orgc'])) {
@@ -5940,7 +5779,7 @@ class Server extends AppModel
     }
 
     /**
-     * Returns an array with the event.
+     * Returns an array with the remote event.
      * @param int $serverId
      * @param int $eventId
      * @return array
@@ -5949,7 +5788,7 @@ class Server extends AppModel
     public function previewEvent($serverId, $eventId)
     {
         $relativeUri =  '/events/' . $eventId;
-        list($event) = $this->serverGetRequest($serverId, $relativeUri);
+        $event = $this->serverGetRequest($serverId, $relativeUri)->json();
 
         if (!isset($event['Event']['Orgc'])) {
             $event['Event']['Orgc']['name'] = $event['Event']['orgc'];
@@ -6379,7 +6218,7 @@ class Server extends AppModel
         return true;
     }
 
-    public function cacheServerInitiator($user, $id = 'all', $jobId = false)
+    public function cacheServerInitiator($user, $id = 'all', $jobId = null)
     {
         $params = array(
             'conditions' => array('caching_enabled' => 1),
@@ -6400,72 +6239,59 @@ class Server extends AppModel
             $job = ClassRegistry::init('Job');
             $job->id = $jobId;
             if (!$job->exists()) {
-                $jobId = false;
+                $jobId = null;
             }
         }
         foreach ($servers as $k => $server) {
-            $this->__cacheInstance($server, $redis, $jobId);
-            if ($jobId) {
-                $job->saveField('progress', 100 * $k / count($servers));
-                $job->saveField('message', 'Server ' . $server['Server']['id'] . ' cached.');
+            $result = $this->__cacheInstance($server, $redis, $jobId);
+            if ($jobId && $result) {
+                $job->saveProgress($jobId, 'Server ' . $server['Server']['id'] . ' cached.', 100 * $k / count($servers));
             }
         }
         return true;
     }
 
-    private function __cacheInstance($server, $redis, $jobId = false)
+    /**
+     * @param array $server
+     * @param Redis $redis
+     * @param int|null $jobId
+     * @return bool
+     * @throws JsonException
+     */
+    private function __cacheInstance(array $server, $redis, $jobId = null)
     {
-        $continue = true;
-        $i = 0;
         if ($jobId) {
             $job = ClassRegistry::init('Job');
-            $job->id = $jobId;
         }
-        $redis->del('misp:server_cache:' . $server['Server']['id']);
-        $HttpSocket = null;
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        while ($continue) {
-            $i++;
-            $pipe = $redis->multi(Redis::PIPELINE);
-            $chunk_size = 50000;
-            $data = $this->__getCachedAttributes($server, $HttpSocket, $chunk_size, $i);
-            if (empty(trim($data))) {
-                $continue = false;
-            } else {
-                $data = explode(PHP_EOL, trim($data));
-                foreach ($data as $entry) {
+        $serverId = $server['Server']['id'];
+
+        $redis->del('misp:server_cache:' . $serverId);
+        $serverSync = $this->setupServerSync($server);
+        $cached = 0;
+
+        try {
+            foreach ($serverSync->attributeCache(10000) as $chunk) {
+                $pipe = $redis->multi(Redis::PIPELINE);
+                foreach ($chunk as $entry) {
                     list($value, $uuid) = explode(',', $entry);
                     if (!empty($value)) {
-                        $redis->sAdd('misp:server_cache:' . $server['Server']['id'], $value);
+                        $redis->sAdd('misp:server_cache:' . $serverId, $value);
                         $redis->sAdd('misp:server_cache:combined', $value);
-                        $redis->sAdd('misp:server_cache:event_uuid_lookup:' . $value, $server['Server']['id'] . '/' . $uuid);
+                        $redis->sAdd('misp:server_cache:event_uuid_lookup:' . $value, $serverId . '/' . $uuid);
+                        $cached++;
                     }
                 }
+                if ($jobId) {
+                    $job->saveProgress($jobId, __('Server %s: %s attributes cached.', $serverId, $cached));
+                }
+                $pipe->exec();
             }
-            if ($jobId) {
-                $job->saveField('message', 'Server ' . $server['Server']['id'] . ': ' . ((($i -1) * $chunk_size) + count($data)) . ' attributes cached.');
-            }
-            $pipe->exec();
+            $redis->set('misp:server_cache_timestamp:' . $serverId, time());
+            return true;
+        } catch (Exception $e) {
+            $this->logException("Could not get cached attributes from server $serverId.", $e);
+            return false;
         }
-        $redis->set('misp:server_cache_timestamp:' . $server['Server']['id'], time());
-        return true;
-    }
-
-    private function __getCachedAttributes($server, $HttpSocket, $chunk_size, $i)
-    {
-        $filter_rules = array(
-            'returnFormat' => 'cache',
-            'includeEventUuid' => 1,
-            'page' => $i,
-            'limit' => $chunk_size
-        );
-        $request = $this->setupSyncRequest($server);
-        try {
-            $response = $HttpSocket->post($server['Server']['url'] . '/attributes/restSearch.json', json_encode($filter_rules), $request);
-        } catch (SocketException $e) {
-            return $e->getMessage();
-        }
-        return $response->body;
     }
 
     public function attachServerCacheTimestamps($data)
@@ -6501,58 +6327,25 @@ class Server extends AppModel
         if (empty($server)) {
             return __('Invalid server');
         }
-        $HttpSocket = $this->setupHttpSocket($server);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/users/resetauthkey/me';
+
         try {
-            $response = $HttpSocket->post($uri, '{}', $request);
-        } catch (Exception $e) {
-            $this->Log = ClassRegistry::init('Log');
-            $this->Log->create();
-            $message = 'Could not reset the remote authentication key.';
-            $this->Log->save(array(
-                    'org' => 'SYSTEM',
-                    'model' => 'Server',
-                    'model_id' => $id,
-                    'email' => 'SYSTEM',
-                    'action' => 'error',
-                    'user_id' => 0,
-                    'title' => 'Error: ' . $message,
-            ));
-            return $message;
-        }
-        if ($response->isOk()) {
-            try {
-                $response = $this->jsonDecode($response->body);
-            } catch (Exception $e) {
-                $message = 'Invalid response received from the remote instance.';
-
-                $this->logException($message, $e);
-
-                $this->Log = ClassRegistry::init('Log');
-                $this->Log->create();
-                $this->Log->save(array(
-                        'org' => 'SYSTEM',
-                        'model' => 'Server',
-                        'model_id' => $id,
-                        'email' => 'SYSTEM',
-                        'action' => 'error',
-                        'user_id' => 0,
-                        'title' => 'Error: ' . $message,
-                ));
-                return $message;
-            }
-            if (!empty($response['message'])) {
-                $authkey = $response['message'];
-            }
-            if (substr($authkey, 0, 17) === 'Authkey updated: ') {
-                $authkey = substr($authkey, 17, 57);
-            }
+            $authkey = $this->setupServerSync($server)->resetAuthKey();
             $server['Server']['authkey'] = $authkey;
             $this->save($server);
             return true;
-        } else {
-            return __('Could not reset the remote authentication key.');
+
+        } catch (Exception $e) {
+            if ($e instanceof HttpClientException) {
+                $message = __('Could not reset the remote authentication key: %s', $e->getMessage());
+            } else {
+                $message = __('Invalid response received from the remote instance.');
+            }
+
+            $this->logException($message, $e);
+
+            $this->Log = ClassRegistry::init('Log');
+            $this->Log->createLogEntry('SYSTEM', 'error', 'Server', $id, 'Error: ' . $message);
+            return $message;
         }
     }
 
@@ -6591,94 +6384,58 @@ class Server extends AppModel
     /**
      * @param int $serverId
      * @param string $relativeUri
-     * @param HttpSocket|null $HttpSocket
-     * @return array
+     * @return JsonHttpSocketResponse
      * @throws Exception
      */
-    private function serverGetRequest($serverId, $relativeUri, HttpSocket $HttpSocket = null)
+    private function serverGetRequest($serverId, $relativeUri)
     {
         $server = $this->find('first', array(
             'conditions' => array('Server.id' => $serverId),
+            'recursive' => -1,
         ));
         if ($server === null) {
             throw new Exception(__("Server with ID '$serverId' not found."));
         }
 
-        if (!$HttpSocket) {
-            $HttpSocket = $this->setupHttpSocket($server);
-        }
-        $request = $this->setupSyncRequest($server);
-
-        $uri = $server['Server']['url'] . $relativeUri;
-        $response = $HttpSocket->get($uri, array(), $request);
-
-        if ($response === false) {
-            throw new Exception(__("Could not reach '$uri'."));
-        } else if ($response->code == 404) { // intentional !=
-            throw new NotFoundException(__("Fetching the '$uri' failed with HTTP error 404: Not Found"));
-        } else if ($response->code == 405) { // intentional !=
-            $responseText = json_decode($response->body, true);
-            if ($responseText !== null) {
-                throw new Exception(sprintf(__("Fetching the '$uri' failed with HTTP error %s: %s"), $response->code, $responseText['message']));
-            }
-        }
-
-        if ($response->code != 200) { // intentional !=
-            throw new Exception(sprintf(__("Fetching the '$uri' failed with HTTP error %s: %s"), $response->code, $response->reasonPhrase));
-        }
-
-        $data = json_decode($response->body, true);
-        if ($data === null) {
-            throw new Exception(__('Could not parse JSON: ') . json_last_error_msg(), json_last_error());
-        }
-
-        return array($data, $response);
+        $serverSync = $this->setupServerSync($server);
+        return $serverSync->get($relativeUri);
     }
 
+    /**
+     * @param int $id
+     * @return array|mixed|null
+     * @throws Exception
+     */
     public function getRemoteUser($id)
     {
         $server = $this->find('first', array(
             'conditions' => array('Server.id' => $id),
             'recursive' => -1
         ));
-        $HttpSocket = $this->setupHttpSocket($server);
-        $request = $this->setupSyncRequest($server);
-        $uri = $server['Server']['url'] . '/users/view/me.json';
+        if (!$server) {
+            throw new Exception("Server with ID $id not found.");
+        }
+
         try {
-            $response = $HttpSocket->get($uri, false, $request);
+            $user = $this->setupServerSync($server)->getRemoteUser();
         } catch (Exception $e) {
-            $this->Log = ClassRegistry::init('Log');
-            $this->Log->create();
-            $message = __('Could not fetch remote user account.');
-            $this->Log->save(array(
-                    'org' => 'SYSTEM',
-                    'model' => 'Server',
-                    'model_id' => $id,
-                    'email' => 'SYSTEM',
-                    'action' => 'error',
-                    'user_id' => 0,
-                    'title' => 'Error: ' . $message,
-            ));
+             $message = __('Could not fetch remote user account: %s.', $e->getMessage());
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $id, 'Error: ' . $message);
             return $message;
         }
-        if ($response->isOk()) {
-            $user = $this->jsonDecode($response->body);
-            if (!empty($user['User'])) {
-                $results = [
-                    __('User') => $user['User']['email'],
-                    __('Role name') => isset($user['Role']['name']) ? $user['Role']['name'] : __('Unknown, outdated instance'),
-                    __('Sync flag') => isset($user['Role']['perm_sync']) ? ($user['Role']['perm_sync'] ? __('Yes') : __('No')) : __('Unknown, outdated instance'),
-                ];
-                if (isset($response->headers['X-Auth-Key-Expiration'])) {
-                    $date = new DateTime($response->headers['X-Auth-Key-Expiration']);
-                    $results[__('Auth key expiration')] = $date->format('Y-m-d H:i:s');
-                }
-                return $results;
-            } else {
-                return __('No user object received in response.');
+        if (!empty($user['User'])) {
+            $results = [
+                __('User') => $user['User']['email'],
+                __('Role name') => isset($user['Role']['name']) ? $user['Role']['name'] : __('Unknown, outdated instance'),
+                __('Sync flag') => isset($user['Role']['perm_sync']) ? ($user['Role']['perm_sync'] ? __('Yes') : __('No')) : __('Unknown, outdated instance'),
+            ];
+            if (isset($response->headers['X-Auth-Key-Expiration'])) {
+                $date = new DateTime($response->headers['X-Auth-Key-Expiration']);
+                $results[__('Auth key expiration')] = $date->format('Y-m-d H:i:s');
             }
+            return $results;
         } else {
-            return $response->code;
+            return __('No user object received in response.');
         }
     }
 }

@@ -3719,9 +3719,6 @@ class EventsController extends AppController
 
     public function filterEventIdsForPush()
     {
-        if (!$this->userRole['perm_sync']) {
-            throw new MethodNotAllowedException(__('You do not have the permission to do that.'));
-        }
         if ($this->request->is('post')) {
             $incomingIDs = array();
             $incomingEvents = array();
@@ -3734,7 +3731,7 @@ class EventsController extends AppController
                 'recursive' => -1,
                 'fields' => array('Event.uuid', 'Event.timestamp', 'Event.locked'),
             ));
-            foreach ($events as $k => $v) {
+            foreach ($events as $v) {
                 if ($v['Event']['timestamp'] >= $incomingEvents[$v['Event']['uuid']]) {
                     unset($incomingEvents[$v['Event']['uuid']]);
                     continue;
@@ -3743,21 +3740,18 @@ class EventsController extends AppController
                     unset($incomingEvents[$v['Event']['uuid']]);
                 }
             }
-            $this->set('result', array_keys($incomingEvents));
+            return $this->RestResponse->viewData(array_keys($incomingEvents));
         }
     }
 
     public function checkuuid($uuid)
     {
-        if (!$this->userRole['perm_sync']) {
-            throw new MethodNotAllowedException(__('You do not have the permission to do that.'));
-        }
-        $events = $this->Event->find('first', array(
-                'conditions' => array('Event.uuid' => $uuid),
-                'recursive' => -1,
-                'fields' => array('Event.uuid'),
+        $event = $this->Event->find('first', array(
+            'conditions' => array('Event.uuid' => $uuid),
+            'recursive' => -1,
+            'fields' => array('Event.uuid'),
         ));
-        $this->set('result', array('result' => empty($events)));
+        return $this->RestResponse->viewData(['exists' => !empty($event)]);
     }
 
     public function pushProposals($uuid)

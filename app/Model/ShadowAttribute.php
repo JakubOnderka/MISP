@@ -635,50 +635,28 @@ class ShadowAttribute extends AppModel
         return false;
     }
 
-    public function pullProposals($user, $server, $HttpSocket = null)
+    /**
+     * @param array $user
+     * @param ServerSync $serverSync
+     * @return int Number of saved proposals
+     * @throws HttpClientException
+     * @throws HttpClientJsonException
+     */
+    public function pullProposals(array $user, ServerSync $serverSync)
     {
-        $version = explode('.', $server['Server']['version']);
-        if (
-            ($version[0] == 2 && $version[1] == 4 && $version[2] < 111)
-        ) {
+        if (!$serverSync->isSupported(ServerSync::FEATURE_PROPOSALS)) {
             return 0;
         }
-        $url = $server['Server']['url'];
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        $request = $this->setupSyncRequest($server);
-        $i = 1;
+
         $fetchedCount = 0;
-        $chunk_size = 1000;
         $timestamp = strtotime("-90 day");
-        while(true) {
-            $uri = sprintf(
-                '%s/shadow_attributes/index/all:1/timestamp:%s/limit:%s/page:%s/deleted[]:0/deleted[]:1.json',
-                $url,
-                $timestamp,
-                $chunk_size,
-                $i
-            );
-            $i += 1;
-            $response = $HttpSocket->get($uri, false, $request);
-            if ($response->code == 200) {
-                $data = json_decode($response->body, true);
-                if (empty($data)) {
-                    return $fetchedCount;
-                }
-                $returnSize = count($data);
-                foreach ($data as $k => $proposal) {
-                    $result = $this->capture($proposal['ShadowAttribute'], $user);
-                    if ($result) {
-                        $fetchedCount += 1;
-                    }
-                }
-                if ($returnSize < $chunk_size) {
-                    return $fetchedCount;
-                }
-            } else {
-                return $fetchedCount;
+        foreach ($serverSync->pullProposals($timestamp) as $proposal) {
+            $result = $this->capture($proposal['ShadowAttribute'], $user);
+            if ($result) {
+                $fetchedCount++;
             }
         }
+        return $fetchedCount;
     }
 
     public function buildConditions($user)
