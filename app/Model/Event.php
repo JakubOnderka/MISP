@@ -1051,14 +1051,28 @@ class Event extends AppModel
      * @param ServerSync $serverSync
      * @param array $event
      * @return bool
-     * @throws JsonException
      */
-    public function uploadSightingsToServer(array $sightings, ServerSync $serverSync, array $event)
+    public function uploadSightingsToServer(ServerSync $serverSync, array $event, array $sightings)
     {
         // TODO: New – check if sightings can be pushed to remote server. This is new behaviour.
         $event = $this->__prepareForPushToServer($event, $serverSync->getServer());
         if (is_numeric($event)) {
             return false;
+        }
+
+        // Filter out sightings that are already present on remote server. Since sightings are immutable, we don't need
+        // to check update timestamp
+        if ($serverSync->isSupported(ServerSync::SIGHTINGS_FILTER)) {
+            $sightingsUuidToPush = $serverSync->filterSightingsForPush($sightings);
+            if (empty($sightingsUuidToPush)) {
+                return true; // Nothing to push
+            }
+            $sightingsUuidToPush = array_flip($sightingsUuidToPush);
+            foreach ($sightings as $k => $sighting) {
+                if (!isset($sightingsUuidToPush[$sighting['uuid']])) {
+                    unset($sightings[$k]);
+                }
+            }
         }
 
         foreach ($sightings as &$sighting) {
@@ -4361,13 +4375,11 @@ class Event extends AppModel
         $elevatedUser = array(
             'Role' => array(
                 'perm_site_admin' => 1,
-                'perm_sync' => 1
+                'perm_sync' => 1,
+                'perm_audit' => 0,
             ),
             'org_id' => $eventOrgcId['Event']['orgc_id']
         );
-        $elevatedUser['Role']['perm_site_admin'] = 1;
-        $elevatedUser['Role']['perm_sync'] = 1;
-        $elevatedUser['Role']['perm_audit'] = 0;
         $event = $this->fetchEvent($elevatedUser, array('eventid' => $id, 'metadata' => 1));
         if (empty($event)) {
             return true;
@@ -4405,59 +4417,60 @@ class Event extends AppModel
             }
             $serverSync = $this->setupServerSync($server);
             // Skip servers where the event has come from.
-            if (($passAlong != $server['Server']['id'])) {
-                $params = array();
-                if (!empty($server['Server']['push_rules'])) {
-                    $push_rules = json_decode($server['Server']['push_rules'], true);
-                    if (!empty($push_rules['tags']['NOT'])) {
-                        $params['blockedAttributeTags'] = $push_rules['tags']['NOT'];
-                    }
+            if ($passAlong == $server['Server']['id']) {
+                continue;
+            }
+            $params = array();
+            if (!empty($server['Server']['push_rules'])) {
+                $push_rules = json_decode($server['Server']['push_rules'], true);
+                if (!empty($push_rules['tags']['NOT'])) {
+                    $params['blockedAttributeTags'] = $push_rules['tags']['NOT'];
                 }
-                $params = array_merge($params, array(
-                    'eventid' => $id,
-                    'includeAttachments' => true,
-                    'includeAllTags' => true,
-                    'deleted' => array(0,1),
-                    'excludeGalaxy' => 1
-                ));
-                if (!empty($server['Server']['internal'])) {
-                    $params['excludeLocalTags'] = 0;
-                }
-                $event = $this->fetchEvent($elevatedUser, $params);
-                $event = $event[0];
-                $event['Event']['locked'] = 1;
-                // attach sightings if needed
-                if ($scope === 'sightings') {
-                    $this->Sighting = ClassRegistry::init('Sighting');
-                    $fakeSyncUser = array(
-                        'org_id' => $server['Server']['remote_org_id'],
-                        'Role' => array(
-                            'perm_site_admin' => 0
-                        )
-                    );
-                    $sightings = $this->Sighting->attachToEvent($event, $fakeSyncUser, null, false, true);
-                    if (!empty($sightings)) {
-                        $thisUploaded = $this->uploadSightingsToServer($sightings, $serverSync, $event);
-                    } else {
-                        $thisUploaded = true;
-                    }
+            }
+            $params = array_merge($params, array(
+                'eventid' => $id,
+                'includeAttachments' => true,
+                'includeAllTags' => true,
+                'deleted' => array(0,1),
+                'excludeGalaxy' => 1
+            ));
+            if (!empty($server['Server']['internal'])) {
+                $params['excludeLocalTags'] = 0;
+            }
+            $event = $this->fetchEvent($elevatedUser, $params);
+            $event = $event[0];
+            $event['Event']['locked'] = 1;
+            // attach sightings if needed
+            if ($scope === 'sightings') {
+                $this->Sighting = ClassRegistry::init('Sighting');
+                $fakeSyncUser = array(
+                    'org_id' => $server['Server']['remote_org_id'],
+                    'Role' => array(
+                        'perm_site_admin' => 0
+                    )
+                );
+                $sightings = $this->Sighting->attachToEvent($event, $fakeSyncUser, null, false, true);
+                if (!empty($sightings)) {
+                    $thisUploaded = $this->uploadSightingsToServer($serverSync, $event, $sightings);
                 } else {
-                    $fakeSyncUser = array(
-                        'org_id' => $server['Server']['remote_org_id'],
-                        'Role' => array(
-                            'perm_site_admin' => 0
-                        )
-                    );
-                    $this->Server->syncGalaxyClusters($serverSync, $server, $fakeSyncUser, $technique=$event['Event']['id'], $event=$event);
-                    $thisUploaded = $this->uploadEventToServer($event, $server, $serverSync);
-                    if (isset($this->data['ShadowAttribute'])) {
-                        $this->Server->syncProposals($serverSync, $server, null, $id, $this);
-                    }
+                    $thisUploaded = true;
                 }
-                if (!$thisUploaded) {
-                    $uploaded = !$uploaded ? $uploaded : $thisUploaded;
-                    $failedServers[] = $server['Server']['url'];
+            } else {
+                $fakeSyncUser = array(
+                    'org_id' => $server['Server']['remote_org_id'],
+                    'Role' => array(
+                        'perm_site_admin' => 0
+                    )
+                );
+                $this->Server->syncGalaxyClusters($serverSync, $server, $fakeSyncUser, $technique=$event['Event']['id'], $event=$event);
+                $thisUploaded = $this->uploadEventToServer($event, $server, $serverSync);
+                if (isset($this->data['ShadowAttribute'])) {
+                    $this->Server->syncProposals($serverSync, $server, null, $id, $this);
                 }
+            }
+            if (!$thisUploaded) {
+                $uploaded = !$uploaded ? $uploaded : $thisUploaded;
+                $failedServers[] = $server['Server']['url'];
             }
         }
         if (!$uploaded) {

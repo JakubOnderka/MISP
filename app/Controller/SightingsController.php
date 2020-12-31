@@ -331,6 +331,18 @@ class SightingsController extends AppController
         $this->render('ajax/view_sightings');
     }
 
+    public function filterSightingsForPush()
+    {
+        if ($this->request->is('post')) {
+            $sightingUuids = $this->request->data;
+            $existingSightings = $this->Sighting->find('column', [
+                'conditions' => ['Sighting.uuid' => $sightingUuids],
+                'fields' => ['Sighting.uuid'],
+            ]);
+            return $this->RestResponse->viewData(array_diff($sightingUuids, $existingSightings));
+        }
+    }
+
     // Save sightings synced over, restricted to sync users
     public function bulkSaveSightings($eventId = false)
     {

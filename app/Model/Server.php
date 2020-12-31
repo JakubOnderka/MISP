@@ -3416,7 +3416,7 @@ class Server extends AppModel
             if (!empty($event)) {
                 $event = $event[0];
                 $sightings = $this->Sighting->attachToEvent($event, $user, null, false, true);
-                $result = $eventModel->uploadSightingsToServer($sightings, $server, $event);
+                $result = $eventModel->uploadSightingsToServer($serverSync, $event, $sightings);
                 if ($result) {
                     $successes[] = 'Sightings for event ' .  $event['Event']['id'];
                 }

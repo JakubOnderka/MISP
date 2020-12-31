@@ -78,7 +78,8 @@ class ServerSync
         FEATURE_CHECK_UUID = 'checkuuid',
         FEATURE_GALAXY_CLUSTER_EDIT = 'supportEditOfGalaxyCluster',
         FEATURE_PUSH = 'push',
-        ORG_RULE_AS_ARRAY = 'orgRuleAsArray';
+        ORG_RULE_AS_ARRAY = 'orgRuleAsArray',
+        SIGHTINGS_FILTER = 'sightings_filter';
 
     /** @var array */
     private $request;
@@ -293,6 +294,19 @@ class ServerSync
     }
 
     /**
+     * @param array $sightings
+     * @return array Sighting UUIDs that should be push
+     * @throws HttpClientException
+     * @throws HttpClientJsonException
+     * @see SightingsController::filterSightingsForPush
+     */
+    public function filterSightingsForPush(array $sightings)
+    {
+        $sightingsUuid = array_column($sightings, 'uuid');
+        return $this->post('/sightings/filterSightingsForPush', json_encode($sightingsUuid))->json();
+    }
+
+    /**
      * @param int|string $eventId Event remote ID or UUID
      * @param array $sightings
      * @return array
@@ -443,10 +457,12 @@ class ServerSync
             case self::FEATURE_PROPOSALS:
             case self::FEATURE_CHECK_UUID:
             case self::ORG_RULE_AS_ARRAY:
+            case self::SIGHTINGS_FILTER:
                 $version = explode('.', $this->getVersion()['version']);
                 if ($feature === self::FEATURE_PROPOSALS) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] >= 111;
-                } else if ($feature === self::FEATURE_CHECK_UUID) {
+                } else if ($feature === self::FEATURE_CHECK_UUID || $feature === self::SIGHTINGS_FILTER) {
+                    return true; // TODO: Just for testing
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 136;
                 } else if ($feature === self::ORG_RULE_AS_ARRAY) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 123;
