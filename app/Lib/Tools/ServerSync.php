@@ -5,6 +5,30 @@ App::uses('SyncTool', 'Tools');
 class JsonHttpSocketResponse extends HttpSocketResponse
 {
     /**
+     * @param string $message
+     * @throws Exception
+     */
+    public function parseResponse($message)
+    {
+        parent::parseResponse($message);
+
+        $contentEncoding = $this->getHeader('Content-Encoding');
+        if ($contentEncoding === 'gzip' && function_exists('gzdecode')) {
+            $this->body = gzdecode($this->body);
+            if ($this->body === false) {
+                throw new Exception("Response should be gzip encoded, but gzip decoding failed.");
+            }
+        } else if ($contentEncoding === 'br' && function_exists('brotli_uncompress')) {
+            $this->body = brotli_uncompress($this->body);
+            if ($this->body === false) {
+                throw new Exception("Response should be brotli encoded, but brotli decoding failed.");
+            }
+        } else if ($contentEncoding) {
+            throw new Exception("Remote server returns unsupported content encoding '$contentEncoding'");
+        }
+    }
+
+    /**
      * Decodes JSON string and throws exception if string is not valid JSON.
      *
      * @return array
@@ -117,6 +141,12 @@ class ServerSync
                 'User-Agent' => 'MISP ' . $version . (empty($mispCommit) ? '' : " - #$mispCommit"),
             ],
         ];
+
+        $acceptedEncodings = $this->acceptedEncodings();
+        if (!empty($acceptedEncodings)) {
+            $this->defaultRequest['header']['Accept-Encoding'] = implode(', ', $acceptedEncodings);
+        }
+
         if ($mispCommit) {
             $this->defaultRequest['header']['commit'] = $mispCommit; // Ugly, but to keep BC
         }
@@ -527,7 +557,7 @@ class ServerSync
         $request = $this->defaultRequest;
         // For bigger request than 1 kB use GZIP compression
         if (function_exists('gzencode') && is_string($data) && strlen($data) > 1024 && $this->isSupported(self::FEATURE_GZIP_REQUESTS)) {
-            $data = gzencode($data);
+            $data = gzencode($data, 3);
             $request['header']['Content-Type'] = 'application/x-gzip';
         } else {
             $request['header']['Content-Type'] = 'application/json';
@@ -639,5 +669,21 @@ class ServerSync
     {
         $flags = defined('JSON_THROW_ON_ERROR') ? JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE : JSON_UNESCAPED_UNICODE;
         return json_encode($content, $flags);
+    }
+
+    /**
+     * @return string[]
+     */
+    private function acceptedEncodings()
+    {
+        $supportedEncoding = [];
+        // Enable gzipped responses if PHP has 'gzdecode' method
+        if (function_exists('gzdecode')) {
+            $supportedEncoding[] = 'gzip';
+        }
+        if (function_exists('brotli_uncompress')) {
+            $supportedEncoding[] = 'br';
+        }
+        return $supportedEncoding;
     }
 }
