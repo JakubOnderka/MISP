@@ -104,7 +104,8 @@ class ServerSync
         FEATURE_PUSH = 'push',
         FEATURE_ORG_RULE_AS_ARRAY = 'orgRuleAsArray',
         FEATURE_SIGHTINGS_FILTER = 'sightingsFilter',
-        FEATURE_GZIP_REQUESTS = 'gzipRequests';
+        FEATURE_GZIP_REQUESTS = 'gzipRequests',
+        FEATURE_BROTLI_REQUESTS = 'brotliRequests';
 
     /** @var array */
     private $defaultRequest;
@@ -523,7 +524,10 @@ class ServerSync
                 return isset($version['perm_sync']) ? $version['perm_sync'] : false;
             case self::FEATURE_GZIP_REQUESTS:
                 $version = $this->getVersion();
-                return isset($version['gzip_requests']) ? $version['gzip_requests'] : false;
+                return isset($version['compressed_requests']) ? in_array('gzip', $version['compressed_requests']) : false;
+            case self::FEATURE_BROTLI_REQUESTS:
+                $version = $this->getVersion();
+                return isset($version['compressed_requests']) ? in_array('br', $version['compressed_requests']) : false;
         }
 
         throw new InvalidArgumentException("Invalid feature constant, '$feature' given.");
@@ -554,14 +558,20 @@ class ServerSync
      */
     public function post($url, $data = [])
     {
-        $request = $this->defaultRequest;
-        // For bigger request than 1 kB use GZIP compression
-        if (function_exists('gzencode') && is_string($data) && strlen($data) > 1024 && $this->isSupported(self::FEATURE_GZIP_REQUESTS)) {
-            $data = gzencode($data, 3);
-            $request['header']['Content-Type'] = 'application/x-gzip';
-        } else {
-            $request['header']['Content-Type'] = 'application/json';
+        // For bigger request than 1 kB use compression
+        $contentType = 'application/json';
+        if (is_string($data) && strlen($data) > 1024) {
+            if (function_exists('brotli_compress') && $this->isSupported(self::FEATURE_BROTLI_REQUESTS)) {
+                $data = brotli_compress($data, 3);
+                $contentType = 'application/x-br';
+            } else if (function_exists('gzencode') && $this->isSupported(self::FEATURE_GZIP_REQUESTS)) {
+                $data = gzencode($data, 3);
+                $contentType = 'application/x-gzip';
+            }
         }
+
+        $request = $this->defaultRequest;
+        $request['header']['Content-Type'] = $contentType;
 
         $url = $this->constructUrl($url);
         /** @var JsonHttpSocketResponse $response */

@@ -189,38 +189,7 @@ class AppController extends Controller
             $userLoggedIn = $this->__customAuthentication($_SERVER);
         }
         if ($this->_isRest()) {
-            $jsonDecode = function ($dataToDecode) {
-                if (empty($dataToDecode)) {
-                    return null;
-                }
-                try {
-                    if (defined('JSON_THROW_ON_ERROR')) {
-                        // JSON_THROW_ON_ERROR is supported since PHP 7.3
-                        return json_decode($dataToDecode, true, 512, JSON_THROW_ON_ERROR);
-                    } else {
-                        $decoded = json_decode($dataToDecode, true);
-                        if ($decoded === null) {
-                            throw new UnexpectedValueException('Could not parse JSON: ' . json_last_error_msg(), json_last_error());
-                        }
-                        return $decoded;
-                    }
-                } catch (Exception $e) {
-                    throw new HttpException('Invalid JSON input. Make sure that the JSON input is a correctly formatted JSON string. This request has been blocked to avoid an unfiltered request.', 405, $e);
-                }
-            };
-            // Support for compressed JSON requests, maximum size is 100 MB to avoid possible compress DoS.
-            $this->RequestHandler->addInputType('gz', [function ($dataToDecode) use ($jsonDecode) {
-                if (!function_exists('gzdecode')) {
-                    throw new MethodNotAllowedException("This server doesn't support compressed requests.");
-                }
-                $dataToDecode = gzdecode($dataToDecode, 1024 * 1024 * 100);
-                if ($dataToDecode === false) {
-                    throw new MethodNotAllowedException('Invalid compressed data');
-                }
-                return $jsonDecode($dataToDecode);
-            }]);
-            //  Throw exception if JSON in request is invalid. Default CakePHP behaviour would just ignore that error.
-            $this->RequestHandler->addInputType('json', [$jsonDecode]);
+            $this->_registerRequestDataHandlers();
             $this->Security->unlockedActions = array($this->action);
         }
 
@@ -1442,5 +1411,55 @@ class AppController extends Controller
         }
         $this->Auth->login($user);
         return $user;
+    }
+
+    private function _registerRequestDataHandlers()
+    {
+        //  Throw exception if JSON in request is invalid. Default CakePHP behaviour would just ignore that error.
+        $jsonDecode = function ($dataToDecode) {
+            if (empty($dataToDecode)) {
+                return null;
+            }
+            try {
+                if (defined('JSON_THROW_ON_ERROR')) {
+                    // JSON_THROW_ON_ERROR is supported since PHP 7.3
+                    return json_decode($dataToDecode, true, 512, JSON_THROW_ON_ERROR);
+                } else {
+                    $decoded = json_decode($dataToDecode, true);
+                    if ($decoded === null) {
+                        throw new UnexpectedValueException('Could not parse JSON: ' . json_last_error_msg(), json_last_error());
+                    }
+                    return $decoded;
+                }
+            } catch (Exception $e) {
+                throw new HttpException('Invalid JSON input. Make sure that the JSON input is a correctly formatted JSON string. This request has been blocked to avoid an unfiltered request.', 405, $e);
+            }
+        };
+        $this->RequestHandler->addInputType('json', [$jsonDecode]);
+
+        // Support for GZIP compressed JSON requests, maximum size is 100 MB to avoid possible compress DoS.
+        $this->RequestHandler->addInputType('gz', [function ($dataToDecode) use ($jsonDecode) {
+            if (!function_exists('gzdecode')) {
+                throw new MethodNotAllowedException("This server doesn't support GZIP compressed requests.");
+            }
+            $dataToDecode = gzdecode($dataToDecode, 1024 * 1024 * 100);
+            if ($dataToDecode === false) {
+                throw new MethodNotAllowedException('Invalid compressed data');
+            }
+            return $jsonDecode($dataToDecode);
+        }]);
+
+        // Support for brotli compressed JSON requests, maximum size is 100 MB to avoid possible compress DoS.
+        $this->response->type(['br' => ['application/x-br']]);
+        $this->RequestHandler->addInputType('br', [function ($dataToDecode) use ($jsonDecode) {
+            if (!function_exists('brotli_uncompress')) {
+                throw new MethodNotAllowedException("This server doesn't support brotli compressed requests.");
+            }
+            $dataToDecode = brotli_uncompress($dataToDecode, 1024 * 1024 * 100);
+            if ($dataToDecode === false) {
+                throw new MethodNotAllowedException('Invalid compressed data');
+            }
+            return $jsonDecode($dataToDecode);
+        }]);
     }
 }
