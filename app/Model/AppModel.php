@@ -2706,8 +2706,9 @@ class AppModel extends Model
     public function setupServerSync(array $server, $timeout = null)
     {
         App::uses('ServerSync', 'Tools');
-        $request = $this->setupSyncRequest($server);
-        return new ServerSync($server, $request, $timeout);
+        $mispVersion = $this->checkMISPVersion();
+        $mispCommit = $this->checkMIPSCommit();
+        return new ServerSync($server, $mispVersion, $mispCommit, $timeout);
     }
 
     public function setupHttpSocket($server, $HttpSocket = null, $timeout = false)

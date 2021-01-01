@@ -208,6 +208,17 @@ class AppController extends Controller
                     throw new HttpException('Invalid JSON input. Make sure that the JSON input is a correctly formatted JSON string. This request has been blocked to avoid an unfiltered request.', 405, $e);
                 }
             };
+            // Support for compressed JSON requests, maximum size is 100 MB to avoid possible compress DoS.
+            $this->RequestHandler->addInputType('gz', [function ($dataToDecode) use ($jsonDecode) {
+                if (!function_exists('gzdecode')) {
+                    throw new MethodNotAllowedException("This server doesn't support compressed requests.");
+                }
+                $dataToDecode = gzdecode($dataToDecode, 1024 * 1024 * 100);
+                if ($dataToDecode === false) {
+                    throw new MethodNotAllowedException('Invalid compressed data');
+                }
+                return $jsonDecode($dataToDecode);
+            }]);
             //  Throw exception if JSON in request is invalid. Default CakePHP behaviour would just ignore that error.
             $this->RequestHandler->addInputType('json', [$jsonDecode]);
             $this->Security->unlockedActions = array($this->action);

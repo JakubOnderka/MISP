@@ -3068,7 +3068,7 @@ class Server extends AppModel
             $filterRules = $this->filterRuleToParameter($serverSync->getServer()['Server']['pull_rules']);
         }
 
-        if (!empty($filterRules['org']) && !$serverSync->isSupported(ServerSync::ORG_RULE_AS_ARRAY)) {
+        if (!empty($filterRules['org']) && !$serverSync->isSupported(ServerSync::FEATURE_ORG_RULE_AS_ARRAY)) {
             $filterRules['org'] = implode('|', $filterRules['org']);
         }
         $filterRules['minimal'] = 1;

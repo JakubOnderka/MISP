@@ -1806,17 +1806,14 @@ class ServersController extends AppController
 
     public function getVersion()
     {
-        if (!$this->userRole['perm_auth']) {
-            throw new MethodNotAllowedException('This action requires API access.');
-        }
         $versionArray = $this->Server->checkMISPVersion();
-        $this->set('response', array(
+        return $this->RestResponse->viewData([
             'version' => $versionArray['major'] . '.' . $versionArray['minor'] . '.' . $versionArray['hotfix'],
             'perm_sync' => $this->userRole['perm_sync'],
             'perm_sighting' => $this->userRole['perm_sighting'],
             'perm_galaxy_editor' => $this->userRole['perm_galaxy_editor'],
-        ));
-        $this->set('_serialize', 'response');
+            'gzip_requests' => function_exists('gzdecode'),
+        ]);
     }
 
     public function getPyMISPVersion()

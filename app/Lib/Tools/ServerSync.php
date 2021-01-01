@@ -78,11 +78,12 @@ class ServerSync
         FEATURE_CHECK_UUID = 'checkuuid',
         FEATURE_GALAXY_CLUSTER_EDIT = 'supportEditOfGalaxyCluster',
         FEATURE_PUSH = 'push',
-        ORG_RULE_AS_ARRAY = 'orgRuleAsArray',
-        SIGHTINGS_FILTER = 'sightings_filter';
+        FEATURE_ORG_RULE_AS_ARRAY = 'orgRuleAsArray',
+        FEATURE_SIGHTINGS_FILTER = 'sightingsFilter',
+        FEATURE_GZIP_REQUESTS = 'gzipRequests';
 
     /** @var array */
-    private $request;
+    private $defaultRequest;
 
     /** @var HttpSocket */
     private $socket;
@@ -95,13 +96,30 @@ class ServerSync
 
     /**
      * @param array $server
-     * @param array $request
+     * @param array $mispVersion
+     * @param string|null $mispCommit
      * @param null|int $timeout
      */
-    public function __construct(array $server, array $request, $timeout = null)
+    public function __construct(array $server, array $mispVersion, $mispCommit = null, $timeout = null)
     {
+        if (!isset($server['Server']['id'])) {
+            throw new InvalidArgumentException("Invalid server array provided.");
+        }
+
         $this->server = $server;
-        $this->request = $request;
+
+        $version = implode('.', $mispVersion);
+        $this->defaultRequest = [
+            'header' => [
+                'Authorization' => $server['Server']['authkey'],
+                'Accept' => 'application/json',
+                'MISP-version' => $version, // Ugly, but to keep BC
+                'User-Agent' => 'MISP ' . $version . (empty($mispCommit) ? '' : " - #$mispCommit"),
+            ],
+        ];
+        if ($mispCommit) {
+            $this->defaultRequest['header']['commit'] = $mispCommit; // Ugly, but to keep BC
+        }
 
         $syncTool = new SyncTool();
         $this->socket = $syncTool->setupHttpSocket($server, $timeout);
@@ -173,7 +191,7 @@ class ServerSync
      */
     public function postTest($testString)
     {
-        return $this->post('/servers/postTest', json_encode(['testString' => $testString]))->json();
+        return $this->post('/servers/postTest', $this->encode(['testString' => $testString]))->json();
     }
 
     /**
@@ -220,7 +238,7 @@ class ServerSync
      */
     public function eventIndex(array $filterRules)
     {
-        return $this->post('/events/index', json_encode($filterRules))->json();
+        return $this->post('/events/index', $this->encode($filterRules))->json();
     }
 
     /**
@@ -241,7 +259,7 @@ class ServerSync
             ]];
         }
 
-        return $this->post('/events/filterEventIdsForPush', json_encode($onlyRequired))->json();
+        return $this->post('/events/filterEventIdsForPush', $this->encode($onlyRequired))->json();
     }
 
     /**
@@ -255,7 +273,7 @@ class ServerSync
         if (!isset($event['Event']['uuid'])) {
             throw new InvalidArgumentException("Passed event doesn't contain UUID.");
         }
-        $data = json_encode($event);
+        $data = $this->encode($event);
         $this->syncAudit("Pushing Event #{$event['Event']['uuid']}", $data);
         if (!$this->eventExists($event['Event']['uuid'])) {
             return $this->post('/events/add/metadata:1', $data)->json();
@@ -280,7 +298,7 @@ class ServerSync
         $page = 1;
         while (true) {
             $rules['page'] = $page;
-            $attributes = $this->post('/attributes/restSearch.json', json_encode($rules));
+            $attributes = $this->post('/attributes/restSearch.json', $this->encode($rules));
             $attributes = explode(PHP_EOL, trim($attributes));
             if (empty($attributes)) {
                 return;
@@ -303,7 +321,7 @@ class ServerSync
     public function filterSightingsForPush(array $sightings)
     {
         $sightingsUuid = array_column($sightings, 'uuid');
-        return $this->post('/sightings/filterSightingsForPush', json_encode($sightingsUuid))->json();
+        return $this->post('/sightings/filterSightingsForPush', $this->encode($sightingsUuid))->json();
     }
 
     /**
@@ -314,7 +332,7 @@ class ServerSync
      */
     public function pushSightings($eventId, array $sightings)
     {
-        $data = json_encode($sightings);
+        $data = $this->encode($sightings);
         $this->syncAudit("Pushing Sightings for Event #{$eventId}", $data);
         return $this->post("/sightings/bulkSaveSightings/$eventId", $data)->json();
     }
@@ -370,7 +388,7 @@ class ServerSync
      */
     public function pushProposals($eventId, array $shadowAttribute)
     {
-        $data = json_encode($shadowAttribute);
+        $data = $this->encode($shadowAttribute);
         $this->syncAudit("Pushing Proposals for Event #{$eventId}", $data);
         return $this->post("/events/pushProposals/$eventId", $data)->json();
     }
@@ -420,7 +438,7 @@ class ServerSync
      */
     public function galaxyClusterSearch(array $rules)
     {
-        $response = $this->post('/galaxy_clusters/restSearch', json_encode($rules));
+        $response = $this->post('/galaxy_clusters/restSearch', $this->encode($rules));
         $json = $response->json();
         if (!isset($json['response'])) {
             throw new HttpClientJsonException("Response JSON doesn't contain 'response' field.", $response);
@@ -440,7 +458,7 @@ class ServerSync
             throw new InvalidArgumentException("Invalid galaxy cluster provided.");
         }
         $clusterId = $cluster['GalaxyCluster']['id'];
-        $data = json_encode($cluster);
+        $data = $this->encode($cluster);
         $this->syncAudit("Pushing Galaxy Cluster #$clusterId", $data);
         return $this->post('/galaxies/pushCluster', $data)->json();
     }
@@ -456,15 +474,15 @@ class ServerSync
         switch ($feature) {
             case self::FEATURE_PROPOSALS:
             case self::FEATURE_CHECK_UUID:
-            case self::ORG_RULE_AS_ARRAY:
-            case self::SIGHTINGS_FILTER:
+            case self::FEATURE_ORG_RULE_AS_ARRAY:
+            case self::FEATURE_SIGHTINGS_FILTER:
                 $version = explode('.', $this->getVersion()['version']);
                 if ($feature === self::FEATURE_PROPOSALS) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] >= 111;
-                } else if ($feature === self::FEATURE_CHECK_UUID || $feature === self::SIGHTINGS_FILTER) {
+                } else if ($feature === self::FEATURE_CHECK_UUID || $feature === self::FEATURE_SIGHTINGS_FILTER) {
                     return true; // TODO: Just for testing
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 136;
-                } else if ($feature === self::ORG_RULE_AS_ARRAY) {
+                } else if ($feature === self::FEATURE_ORG_RULE_AS_ARRAY) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 123;
                 }
                 break;
@@ -473,11 +491,12 @@ class ServerSync
             case self::FEATURE_PUSH:
                 $version = $this->getVersion();
                 return isset($version['perm_sync']) ? $version['perm_sync'] : false;
-            default:
-                throw new InvalidArgumentException("Invalid feature constant, '$feature' given.");
+            case self::FEATURE_GZIP_REQUESTS:
+                $version = $this->getVersion();
+                return isset($version['gzip_requests']) ? $version['gzip_requests'] : false;
         }
 
-        return false;
+        throw new InvalidArgumentException("Invalid feature constant, '$feature' given.");
     }
 
     /**
@@ -490,7 +509,8 @@ class ServerSync
     public function get($url, array $params = [])
     {
         $url = $this->constructUrl($url, $params);
-        $response = $this->socket->get($url, [], $this->request);
+        /** @var JsonHttpSocketResponse $response */
+        $response = $this->socket->get($url, [], $this->defaultRequest);
         $this->validateResponse($url, $response);
         return $response;
     }
@@ -500,12 +520,22 @@ class ServerSync
      * @param array|string $data
      * @return JsonHttpSocketResponse
      * @throws SocketException
-     * @throws HttpClientException
+     * @throws HttpClientException|HttpClientJsonException
      */
     public function post($url, $data = [])
     {
+        $request = $this->defaultRequest;
+        // For bigger request than 1 kB use GZIP compression
+        if (function_exists('gzencode') && is_string($data) && strlen($data) > 1024 && $this->isSupported(self::FEATURE_GZIP_REQUESTS)) {
+            $data = gzencode($data);
+            $request['header']['Content-Type'] = 'application/x-gzip';
+        } else {
+            $request['header']['Content-Type'] = 'application/json';
+        }
+
         $url = $this->constructUrl($url);
-        $response = $this->socket->post($url, $data, $this->request);
+        /** @var JsonHttpSocketResponse $response */
+        $response = $this->socket->post($url, $data, $request);
         $this->validateResponse($url, $response);
         return $response;
     }
@@ -518,7 +548,8 @@ class ServerSync
     public function head($url)
     {
         $url = $this->constructUrl($url);
-        $response = $this->socket->head($url, [], $this->request);
+        /** @var JsonHttpSocketResponse $response */
+        $response = $this->socket->head($url, [], $this->defaultRequest);
         if ($response && $response->code == 200) {
             return true;
         } else if ($response && $response->code == 404) {
@@ -597,5 +628,16 @@ class ServerSync
             }
         }
         return $url;
+    }
+
+    /**
+     * Encodes array as JSON, keep Unicode unescaped and throw exception if something wrong happen.
+     * @param array $content
+     * @return string
+     */
+    private function encode(array $content)
+    {
+        $flags = defined('JSON_THROW_ON_ERROR') ? JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE : JSON_UNESCAPED_UNICODE;
+        return json_encode($content, $flags);
     }
 }

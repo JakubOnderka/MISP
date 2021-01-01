@@ -1062,7 +1062,7 @@ class Event extends AppModel
 
         // Filter out sightings that are already present on remote server. Since sightings are immutable, we don't need
         // to check update timestamp
-        if ($serverSync->isSupported(ServerSync::SIGHTINGS_FILTER)) {
+        if ($serverSync->isSupported(ServerSync::FEATURE_SIGHTINGS_FILTER)) {
             $sightingsUuidToPush = $serverSync->filterSightingsForPush($sightings);
             if (empty($sightingsUuidToPush)) {
                 return true; // Nothing to push
