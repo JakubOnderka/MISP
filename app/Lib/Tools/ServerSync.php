@@ -167,6 +167,14 @@ class ServerSync
     }
 
     /**
+     * @return int
+     */
+    public function getServerId()
+    {
+        return $this->server['Server']['id'];
+    }
+
+    /**
      * @return array
      * @throws HttpClientJsonException|HttpClientException|SocketException
      */
@@ -319,6 +327,7 @@ class ServerSync
      * @param int $chunkSize
      * @return Generator<string>|void
      * @throws HttpClientException
+     * @throws HttpClientJsonException
      */
     public function attributeCache($chunkSize = 1000)
     {
@@ -497,6 +506,7 @@ class ServerSync
     }
 
     /**
+     * Check if feature is supported by remote server.
      * @param string $feature
      * @return bool
      * @throws HttpClientException
@@ -528,11 +538,10 @@ class ServerSync
                 $version = $this->getVersion();
                 return isset($version['perm_sync']) ? $version['perm_sync'] : false;
             case self::FEATURE_GZIP_REQUESTS:
-                $version = $this->getVersion();
-                return isset($version['compressed_requests']) ? in_array('gzip', $version['compressed_requests']) : false;
             case self::FEATURE_BROTLI_REQUESTS:
                 $version = $this->getVersion();
-                return isset($version['compressed_requests']) ? in_array('br', $version['compressed_requests']) : false;
+                $needle = $feature === self::FEATURE_BROTLI_REQUESTS ? 'br' : 'gzip';
+                return isset($version['compressed_requests']) ? in_array($needle, $version['compressed_requests'], true) : false;
         }
 
         throw new InvalidArgumentException("Invalid feature constant, '$feature' given.");
@@ -563,11 +572,11 @@ class ServerSync
      */
     public function post($url, $data = [])
     {
-        // For bigger request than 1 kB use compression
+        // For bigger request than 1 kB use compression if remote server supports it
         $contentType = 'application/json';
         if (is_string($data) && strlen($data) > 1024) {
             if (function_exists('brotli_compress') && $this->isSupported(self::FEATURE_BROTLI_REQUESTS)) {
-                $data = brotli_compress($data, 3);
+                $data = brotli_compress($data, 3, BROTLI_TEXT);
                 $contentType = 'application/x-br';
             } else if (function_exists('gzencode') && $this->isSupported(self::FEATURE_GZIP_REQUESTS)) {
                 $data = gzencode($data, 3);
@@ -676,7 +685,7 @@ class ServerSync
     }
 
     /**
-     * Encodes array as JSON, keep Unicode unescaped and throw exception if something wrong happen.
+     * Encodes array as JSON, keep Unicode unescaped (to save bandwidth) and throw exception if something wrong happen.
      * @param array $content
      * @return string
      */
@@ -687,6 +696,7 @@ class ServerSync
     }
 
     /**
+     * Returns accepted content encodings (compression algorithms)
      * @return string[]
      */
     private function acceptedEncodings()
@@ -696,6 +706,7 @@ class ServerSync
         if (function_exists('gzdecode')) {
             $supportedEncoding[] = 'gzip';
         }
+        // Enable brotli compressed responses if PHP has 'brotli_uncompress' method
         if (function_exists('brotli_uncompress')) {
             $supportedEncoding[] = 'br';
         }
