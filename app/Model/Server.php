@@ -4581,9 +4581,10 @@ class Server extends AppModel
             $clientCertificate = ['error' => $e->getMessage()];
         }
 
+        $serverSync = $this->setupServerSync($server);
+
         try {
-            $info = $this->setupServerSync($server)->getVersion();
-            return array('status' => 1, 'info' => $info, 'client_certificate' => $clientCertificate);
+            $info = $serverSync->getVersion();
         } catch (HttpClientJsonException $e) {
             $logTitle = 'Error: Connection test failed. Returned data is in the change field.';
             $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle, [
@@ -4607,27 +4608,44 @@ class Server extends AppModel
             $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $logTitle);
             return array('status' => 2, 'client_certificate' => $clientCertificate);
         }
+
+        $post = null;
+        if ($serverSync->isSupported(ServerSync::FEATURE_POST_TEST)) {
+            $post = $this->runPOSTtest($serverSync);
+        }
+
+        return [
+            'status' => 1,
+            'post' => isset($post) ? $post['status'] : false,
+            'info' => $info,
+            'client_certificate' => $clientCertificate,
+            'request_encoding' => isset($post['request_encoding']) ? $post['request_encoding'] : null,
+            'response_encoding' => isset($post['response_encoding']) ? $post['response_encoding'] : null,
+        ];
     }
 
     /**
-     * @param array $server
-     * @return int
+     * @param ServerSync $serverSync
+     * @return array
      * @throws Exception
      */
-    public function runPOSTtest(array $server)
+    private function runPOSTtest(ServerSync $serverSync)
     {
         $testFile = file_get_contents(APP . 'files/scripts/test_payload.txt');
         if (!$testFile) {
             throw new Exception("Could not load payload for POST test.");
         }
 
+        $serverId = $serverSync->getServer()['Server']['id'];
+
         try {
-            $response = $this->setupServerSync($server)->postTest($testFile);
+            list($response, $responseEncoding) = $serverSync->postTest($testFile);
         } catch (Exception $e) {
             $title = 'Error: POST connection test failed. Reason: ' . $e->getMessage();
-            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $title);
-            return 8;
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $serverId, $title);
+            return ['status' => 8];
         }
+        $requestEncoding = isset($response['headers']['Content-type']) ? $response['headers']['Content-type'] : null;
         if (!isset($response['body']['testString']) || $response['body']['testString'] !== $testFile) {
             if (!empty($repsonse['body']['testString'])) {
                 $responseString = $response['body']['testString'];
@@ -4638,19 +4656,23 @@ class Server extends AppModel
             }
 
             $title = 'Error: POST connection test failed due to the message body not containing the expected data. Response: ' . PHP_EOL . PHP_EOL . $responseString;
-            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $title);
-            return 9;
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $serverId, $title);
+            return ['status' => 9, 'response_encoding' => $responseEncoding, 'request_encoding' => $requestEncoding];
         }
-        $headers = array('Accept', 'Content-type');
-        foreach ($headers as $header) {
-            if (!isset($response['headers'][$header]) || $response['headers'][$header] != 'application/json') {
-                $responseHeader = isset($response['headers'][$header]) ? $response['headers'][$header] : 'Header was not set.';
-                $title = 'Error: POST connection test failed due to a header not matching the expected value. Expected: "application/json", received "' . $responseHeader . '"';
-                $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $server['Server']['id'], $title);
-                return 10;
-            }
+        if (!isset($response['headers']['Accept']) || $response['headers']['Accept'] !== 'application/json') {
+            $responseHeader = isset($response['headers']['Accept']) ? $response['headers']['Accept'] : 'Header was not set.';
+            $title = 'Error: POST connection test failed due to an Accept header not matching the expected value. Expected: "application/json", received "' . $responseHeader . '"';
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $serverId, $title);
+            return ['status' => 10, 'response_encoding' => $responseEncoding, 'request_encoding' => $requestEncoding];
         }
-        return 1;
+        $expectedContentType = ['application/json', 'application/x-br', 'application/x-gzip'];
+        if (!$requestEncoding || !in_array($requestEncoding, $expectedContentType)) {
+            $responseHeader = isset($requestEncoding) ? $requestEncoding : 'Header was not set.';
+            $title = 'Error: POST connection test failed due to an Content-type header not matching the expected value. Received "' . $responseHeader . '"';
+            $this->loadLog()->createLogEntry('SYSTEM', 'error', 'Server', $serverId, $title);
+            return ['status' => 10, 'response_encoding' => $responseEncoding, 'request_encoding' => $requestEncoding];
+        }
+        return ['status' => 1, 'response_encoding' => $responseEncoding, 'request_encoding' => $requestEncoding];
     }
 
     /**

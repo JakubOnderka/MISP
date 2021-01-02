@@ -104,6 +104,7 @@ class ServerSync
         FEATURE_PUSH = 'push',
         FEATURE_ORG_RULE_AS_ARRAY = 'orgRuleAsArray',
         FEATURE_SIGHTINGS_FILTER = 'sightingsFilter',
+        FEATURE_POST_TEST = 'postTest',
         FEATURE_GZIP_REQUESTS = 'gzipRequests',
         FEATURE_BROTLI_REQUESTS = 'brotliRequests';
 
@@ -222,7 +223,8 @@ class ServerSync
      */
     public function postTest($testString)
     {
-        return $this->post('/servers/postTest', $this->encode(['testString' => $testString]))->json();
+        $response = $this->post('/servers/postTest', $this->encode(['testString' => $testString]));
+        return [$response->json(), $response->getHeader('Content-Encoding')];
     }
 
     /**
@@ -507,6 +509,7 @@ class ServerSync
             case self::FEATURE_CHECK_UUID:
             case self::FEATURE_ORG_RULE_AS_ARRAY:
             case self::FEATURE_SIGHTINGS_FILTER:
+            case self::FEATURE_POST_TEST:
                 $version = explode('.', $this->getVersion()['version']);
                 if ($feature === self::FEATURE_PROPOSALS) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] >= 111;
@@ -515,6 +518,8 @@ class ServerSync
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 136;
                 } else if ($feature === self::FEATURE_ORG_RULE_AS_ARRAY) {
                     return $version[0] == 2 && $version[1] == 4 && $version[2] > 123;
+                } else if ($feature === self::FEATURE_POST_TEST) {
+                    return $version[0] == 2 && $version[1] == 4 && $version[2] > 68;
                 }
                 break;
             case self::FEATURE_GALAXY_CLUSTER_EDIT:
