@@ -1,86 +1,12 @@
 <?php
-App::uses('HttpSocketResponse', 'Network/Http');
 App::uses('SyncTool', 'Tools');
 
-class JsonHttpSocketResponse extends HttpSocketResponse
-{
-    /**
-     * @param string $message
-     * @throws Exception
-     */
-    public function parseResponse($message)
-    {
-        parent::parseResponse($message);
-
-        $contentEncoding = $this->getHeader('Content-Encoding');
-        if ($contentEncoding === 'gzip' && function_exists('gzdecode')) {
-            $this->body = gzdecode($this->body);
-            if ($this->body === false) {
-                throw new Exception("Response should be gzip encoded, but gzip decoding failed.");
-            }
-        } else if ($contentEncoding === 'br' && function_exists('brotli_uncompress')) {
-            $this->body = brotli_uncompress($this->body);
-            if ($this->body === false) {
-                throw new Exception("Response should be brotli encoded, but brotli decoding failed.");
-            }
-        } else if ($contentEncoding) {
-            throw new Exception("Remote server returns unsupported content encoding '$contentEncoding'");
-        }
-    }
-
-    /**
-     * Decodes JSON string and throws exception if string is not valid JSON.
-     *
-     * @return array
-     * @throws HttpClientJsonException
-     */
-    public function json()
-    {
-        try {
-            if (defined('JSON_THROW_ON_ERROR')) {
-                // JSON_THROW_ON_ERROR is supported since PHP 7.3
-                $decoded = json_decode($this->body, true, 512, JSON_THROW_ON_ERROR);
-            } else {
-                $decoded = json_decode($this->body, true);
-                if ($decoded === null) {
-                    throw new UnexpectedValueException('Could not parse JSON: ' . json_last_error_msg(), json_last_error());
-                }
-            }
-            return $decoded;
-        } catch (Exception $e) {
-            throw new HttpClientJsonException('Could not parse response as JSON.', $this, $e);
-        }
-    }
-}
-
-
-class HttpClientJsonException extends Exception
-{
-    /** @var HttpSocketResponse */
-    private $response;
-
-    public function __construct($message, JsonHttpSocketResponse $response, Throwable $previous = null)
-    {
-        $this->response = $response;
-        parent::__construct($message, 0, $previous);
-    }
-
-    /**
-     * @return HttpSocketResponse
-     */
-    public function getResponse()
-    {
-        return $this->response;
-    }
-}
-
-
-class HttpClientException extends Exception
+class ServerSyncException extends Exception
 {
     /** @var HttpSocketResponse|null */
     private $response;
 
-    public function __construct($message, JsonHttpSocketResponse $response = null, Throwable $previous = null)
+    public function __construct($message, HttpSocketResponseExtended $response = null, Throwable $previous = null)
     {
         $this->response = $response;
         $code = isset($response) ? (int)$response->code : 0;
@@ -111,7 +37,7 @@ class ServerSync
     /** @var array */
     private $defaultRequest;
 
-    /** @var HttpSocket */
+    /** @var HttpSocketExtended */
     private $socket;
 
     /** @var array */
@@ -125,6 +51,7 @@ class ServerSync
      * @param array $mispVersion
      * @param string|null $mispCommit
      * @param null|int $timeout
+     * @throws Exception
      */
     public function __construct(array $server, array $mispVersion, $mispCommit = null, $timeout = null)
     {
@@ -143,12 +70,6 @@ class ServerSync
                 'User-Agent' => 'MISP ' . $version . (empty($mispCommit) ? '' : " - #$mispCommit"),
             ],
         ];
-
-        $acceptedEncodings = $this->acceptedEncodings();
-        if (!empty($acceptedEncodings)) {
-            $this->defaultRequest['header']['Accept-Encoding'] = implode(', ', $acceptedEncodings);
-        }
-
         if ($mispCommit) {
             $this->defaultRequest['header']['commit'] = $mispCommit; // Ugly, but to keep BC
         }
@@ -176,7 +97,7 @@ class ServerSync
 
     /**
      * @return array
-     * @throws HttpClientJsonException|HttpClientException|SocketException
+     * @throws HttpClientJsonException|ServerSyncException|SocketException
      */
     public function getRemoteUser()
     {
@@ -185,7 +106,7 @@ class ServerSync
 
     /**
      * @return array
-     * @throws HttpClientJsonException|HttpClientException|SocketException
+     * @throws HttpClientJsonException|ServerSyncException|SocketException
      */
     public function getVersion()
     {
@@ -204,8 +125,8 @@ class ServerSync
 
     /**
      * @return string New auth key
-     * @throws HttpClientException
-     * @throws HttpClientJsonException|HttpClientException|SocketException|Exception
+     * @throws ServerSyncException
+     * @throws HttpClientJsonException|ServerSyncException|SocketException|Exception
      */
     public function resetAuthKey()
     {
@@ -226,8 +147,8 @@ class ServerSync
     /**
      * @param string $testString
      * @return array
-     * @throws HttpClientException
-     * @throws HttpClientJsonException|HttpClientException|SocketException
+     * @throws ServerSyncException
+     * @throws HttpClientJsonException|ServerSyncException|SocketException
      */
     public function postTest($testString)
     {
@@ -239,7 +160,7 @@ class ServerSync
      * @param string $eventUuid
      * @return bool
      * @throws HttpClientJsonException
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws SocketException
      */
     public function eventExists($eventUuid)
@@ -263,7 +184,7 @@ class ServerSync
      * @param string $eventId Event ID or UUID
      * @param array $params
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      * @throws SocketException
      */
@@ -275,7 +196,7 @@ class ServerSync
     /**
      * @param array $filterRules
      * @return array
-     * @throws HttpClientJsonException|HttpClientException|SocketException
+     * @throws HttpClientJsonException|ServerSyncException|SocketException
      */
     public function eventIndex(array $filterRules)
     {
@@ -285,7 +206,7 @@ class ServerSync
     /**
      * @param array $events
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      * @see EventsController::filterEventIdsForPush
      */
@@ -306,7 +227,7 @@ class ServerSync
     /**
      * @param array $event
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function pushEvent(array $event)
@@ -326,7 +247,7 @@ class ServerSync
     /**
      * @param int $chunkSize
      * @return Generator<string>|void
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function attributeCache($chunkSize = 1000)
@@ -356,7 +277,7 @@ class ServerSync
     /**
      * @param array $sightings
      * @return array Sighting UUIDs that should be push
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      * @see SightingsController::filterSightingsForPush
      */
@@ -382,7 +303,7 @@ class ServerSync
     /**
      * @param int|string $eventId
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function pullSightings($eventId)
@@ -425,7 +346,7 @@ class ServerSync
      * @param int|string $eventId Event remote ID or UUID
      * @param array $shadowAttribute
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function pushProposals($eventId, array $shadowAttribute)
@@ -439,7 +360,7 @@ class ServerSync
      * @param int $timestamp
      * @param int $chunkSize
      * @return Generator<array>|void
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function pullProposals($timestamp, $chunkSize = 1000)
@@ -464,7 +385,7 @@ class ServerSync
     /**
      * @param int|string $clusterId
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function galaxyCluster($clusterId)
@@ -475,7 +396,7 @@ class ServerSync
     /**
      * @param array $rules
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function galaxyClusterSearch(array $rules)
@@ -491,7 +412,7 @@ class ServerSync
     /**
      * @param array $cluster
      * @return array
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function pushGalaxyCluster(array $cluster)
@@ -509,7 +430,7 @@ class ServerSync
      * Check if feature is supported by remote server.
      * @param string $feature
      * @return bool
-     * @throws HttpClientException
+     * @throws ServerSyncException
      * @throws HttpClientJsonException
      */
     public function isSupported($feature)
@@ -550,14 +471,13 @@ class ServerSync
     /**
      * @param string $url
      * @param array $params
-     * @return JsonHttpSocketResponse
+     * @return HttpSocketResponseExtended
      * @throws SocketException
-     * @throws HttpClientException
+     * @throws ServerSyncException
      */
     public function get($url, array $params = [])
     {
         $url = $this->constructUrl($url, $params);
-        /** @var JsonHttpSocketResponse $response */
         $response = $this->socket->get($url, [], $this->defaultRequest);
         $this->validateResponse($url, $response);
         return $response;
@@ -566,9 +486,9 @@ class ServerSync
     /**
      * @param string $url
      * @param array|string $data
-     * @return JsonHttpSocketResponse
+     * @return HttpSocketResponseExtended
      * @throws SocketException
-     * @throws HttpClientException|HttpClientJsonException
+     * @throws ServerSyncException|HttpClientJsonException
      */
     public function post($url, $data = [])
     {
@@ -588,7 +508,6 @@ class ServerSync
         $request['header']['Content-Type'] = $contentType;
 
         $url = $this->constructUrl($url);
-        /** @var JsonHttpSocketResponse $response */
         $response = $this->socket->post($url, $data, $request);
         $this->validateResponse($url, $response);
         return $response;
@@ -597,12 +516,11 @@ class ServerSync
     /**
      * @param string $url
      * @return bool
-     * @throws HttpClientException
+     * @throws ServerSyncException
      */
     public function head($url)
     {
         $url = $this->constructUrl($url);
-        /** @var JsonHttpSocketResponse $response */
         $response = $this->socket->head($url, [], $this->defaultRequest);
         if ($response && $response->code == 200) {
             return true;
@@ -610,26 +528,23 @@ class ServerSync
             return false;
         } else {
             $this->validateResponse($url, $response);
-            throw new HttpClientException(__("Invalid HTTP code for '%s', expected 200 or 404, %s given.", $url, $response->code));
+            throw new ServerSyncException(__("Invalid HTTP code for '%s', expected 200 or 404, %s given.", $url, $response->code));
         }
     }
 
     /**
      * @param string $url
-     * @param JsonHttpSocketResponse $response
-     * @return JsonHttpSocketResponse
-     * @throws HttpClientException
+     * @param HttpSocketResponseExtended $response
+     * @return HttpSocketResponseExtended
+     * @throws ServerSyncException
      */
-    private function validateResponse($url, JsonHttpSocketResponse $response)
+    private function validateResponse($url, HttpSocketResponseExtended $response)
     {
-        if ($response === false) {
-            throw new HttpClientException(__("Could not reach '%s'.", $url));
-        }
         if ($response->code == 0) {
             if ($this->socket->lastError()) {
-                throw new HttpClientException(__("Fetching the '%s' failed: %s", $url, $this->socket->lastError['str']), $response);
+                throw new ServerSyncException(__("Fetching the '%s' failed: %s", $url, $this->socket->lastError['str']), $response);
             } else {
-                throw new HttpClientException(__("Fetching the '%s' failed with unknown error.", $url), $response);
+                throw new ServerSyncException(__("Fetching the '%s' failed with unknown error.", $url), $response);
             }
         }
         if (!$response->isOk()) {
@@ -644,7 +559,7 @@ class ServerSync
             if ($reason) {
                 $message .= "\nReason: '$reason'";
             }
-            throw new HttpClientException($message, $response);
+            throw new ServerSyncException($message, $response);
         }
         return $response;
     }
@@ -693,23 +608,5 @@ class ServerSync
     {
         $flags = defined('JSON_THROW_ON_ERROR') ? JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE : JSON_UNESCAPED_UNICODE;
         return json_encode($content, $flags);
-    }
-
-    /**
-     * Returns accepted content encodings (compression algorithms)
-     * @return string[]
-     */
-    private function acceptedEncodings()
-    {
-        $supportedEncoding = [];
-        // Enable gzipped responses if PHP has 'gzdecode' method
-        if (function_exists('gzdecode')) {
-            $supportedEncoding[] = 'gzip';
-        }
-        // Enable brotli compressed responses if PHP has 'brotli_uncompress' method
-        if (function_exists('brotli_uncompress')) {
-            $supportedEncoding[] = 'br';
-        }
-        return $supportedEncoding;
     }
 }
