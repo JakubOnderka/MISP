@@ -87,8 +87,9 @@ class CustomPaginationTool
     {
         if (isset($params['sort'])) {
             $sortArray = array();
+            $sortKey = $params['sort'];
             foreach ($items as $k => $item) {
-                $sortArray[$k] = !empty(Hash::get($item, $params['sort'])) ? $item[$params['sort']] : '';
+                $sortArray[$k] = isset($item[$sortKey]) ? $item[$sortKey] : '';
             }
             if (empty($params['options']['direction']) || $params['options']['direction'] == 'asc') {
                 asort($sortArray);
@@ -99,7 +100,6 @@ class CustomPaginationTool
             foreach ($sortArray as $k => $sortedElement) {
                 $sortArray[$k] = $items[$k];
             }
-            $items = array();
             $items = $sortArray;
         }
         if (!$escapeReindex) {
