@@ -18,9 +18,4 @@
 ?>
 <script type="text/javascript">
     var showContext = false;
-    $(document).ready(function () {
-        $('.addGalaxy').click(function() {
-            addGalaxyListener(this);
-        });
-    });
 </script>

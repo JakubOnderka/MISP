@@ -160,9 +160,6 @@ $(function () {
     $('.screenshot').click(function() {
         screenshotPopup($(this).attr('src'), $(this).attr('title'));
     });
-    $('.addGalaxy').click(function() {
-        addGalaxyListener(this);
-    });
     $('.sightings_advanced_add').click(function() {
         var selected = [];
         var object_context = $(this).data('object-context');
