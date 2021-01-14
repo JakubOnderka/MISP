@@ -15,12 +15,12 @@ class GenericPickerHelper extends AppHelper {
 
         $select_html = '';
         foreach ($options['select_options'] as $option => $value) {
-            $select_html .= sprintf('%s=%s ', h($option), h($value));
+            $select_html .= sprintf('%s="%s" ', h($option), h($value));
         }
         if (isset($options['functionName']) && $options['functionName'] !== "") {
-            $select_html .= sprintf('data-functionname=%s ', h($options['functionName']));
+            $select_html .= sprintf('data-functionname="%s" ', h($options['functionName']));
         }
-        $select_html .= sprintf(' data-additionaldata=%s', base64_encode($additionalData));
+        $select_html .= sprintf(' data-additionaldata="%s"', base64_encode($additionalData));
         return $select_html;
     }
 
@@ -91,21 +91,10 @@ class GenericPickerHelper extends AppHelper {
         return $pill_html;
     }
 
-    function build_template($param) {
-        $template = "";
-        if(isset($param['template'])) {
-            $templateParam = $param['template'];
-            if (isset($templateParam['preIcon'])) {
-                $template .= $this->_View->element('genericPickerElements/pre_icon', array('preIcon' => $templateParam['preIcon']));
-            }
-            $template .= $this->_View->element('genericPickerElements/name', array('name' => $templateParam['name']));
-            if (isset($templateParam['infoExtra'])) {
-                $template .= $this->_View->element('genericPickerElements/info_extra', array('infoExtra' => $templateParam['infoExtra']));
-            }
-            if (isset($templateParam['infoContextual'])) {
-                $template .= $this->_View->element('genericPickerElements/info_contextual', array('infoContextual' => $templateParam['infoContextual']));
-            }
+    public function build_template(array $param) {
+        if (isset($param['template'])) {
+            return $this->_View->element('genericPickerElements/name', $param['template']);
         }
-        return $template;
+        return '';
     }
 }

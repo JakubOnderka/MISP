@@ -632,6 +632,7 @@ class TagsController extends AppController
                     $conditions[] = array('Tag.user_id' => array(0, $this->Auth->user('id')));
                 }
                 $conditions['Tag.hide_tag'] = 0;
+                $conditions['Tag.name NOT LIKE'] = 'misp-galaxy:%';
                 $allTags = $this->Tag->find('all', array(
                     'conditions' => $conditions,
                     'recursive' => -1,
@@ -640,10 +641,7 @@ class TagsController extends AppController
                 ));
                 $tags = array();
                 foreach ($allTags as $tag) {
-                    $isGalaxyTag = strpos($tag['Tag']['name'], 'misp-galaxy:') === 0;
-                    if (!$isGalaxyTag) {
-                        $tags[$tag['Tag']['id']] = $tag['Tag'];
-                    }
+                    $tags[$tag['Tag']['id']] = $tag['Tag'];
                 }
                 unset($allTags);
                 $expanded = $tags;
