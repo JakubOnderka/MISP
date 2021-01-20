@@ -567,22 +567,40 @@ class Sighting extends AppModel
         if ($extraConditions !== false) {
             $conditions['AND'] = $extraConditions;
         }
-        $sightings = $this->find('all', array(
-            'conditions' => $conditions,
-            'recursive' => -1,
-            'contain' => $contain,
-        ));
-        if (empty($sightings)) {
-            return array();
-        }
-        foreach ($sightings as $k => $sighting) {
-            if (isset($sighting['Attribute']['uuid'])) {
-                $sighting['Sighting']['attribute_uuid'] = $sighting['Attribute']['uuid'];
-            } else {
-                $sighting['Sighting']['attribute_uuid'] = $attribute['Attribute']['uuid'];
+
+        $sightings = [];
+        while (true) {
+            // Fetch sightings in batch to prevent memory overflow
+            $sightingsBatch = $this->find('all', [
+                'conditions' => $conditions,
+                'recursive' => -1,
+                'contain' => $contain,
+                'limit' => 10000,
+                'order' => 'Sighting.id',
+            ]);
+            foreach ($sightingsBatch as $sighting) {
+                if (isset($sighting['Attribute']['uuid'])) {
+                    $sighting['Sighting']['attribute_uuid'] = $sighting['Attribute']['uuid'];
+                    unset($sighting['Attribute']);
+                } else {
+                    $sighting['Sighting']['attribute_uuid'] = $attribute['Attribute']['uuid'];
+                }
+                // Convert to integer to reduce memory usage
+                foreach (['type', 'event_id', 'attribute_id', 'date_sighting', 'org_id'] as $intColumn) {
+                    $sighting['Sighting'][$intColumn] = (int)$sighting['Sighting'][$intColumn];
+                }
+                $sightings[] = $sighting;
             }
-            $sightings[$k] = $sighting;
+            if (count($sightingsBatch) < 10000) {
+                break;
+            }
+            $conditions['Sighting.id >'] = $sighting['Sighting']['id'];
         }
+
+        if (empty($sightings)) {
+            return [];
+        }
+
         return $this->attachOrgToSightings($sightings, $user, $forSync);
     }
 
