@@ -370,6 +370,7 @@ class ACLComponent extends Component
             ),
       'auditLogs' => [
           'admin_index' => ['perm_audit'],
+          'fullChange' => ['perm_audit'],
           'eventIndex' => ['*'],
           'returnDates' => ['*'],
       ],
