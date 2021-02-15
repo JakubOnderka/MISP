@@ -2,6 +2,7 @@
 App::uses('AppModel', 'Model');
 App::uses('RandomTool', 'Tools');
 App::uses('TmpFileTool', 'Tools');
+App::uses('CacheTool', 'Tools');
 
 class Feed extends AppModel
 {
@@ -59,8 +60,24 @@ class Feed extends AppModel
         )
     );
 
-    /*
-     *  Cleanup of empty belongsto relationships
+    const REDIS_CACHE_PREFIX = 'misp:cache:';
+
+    public function __construct($id = false, $table = null, $ds = null)
+    {
+        parent::__construct($id, $table, $ds);
+
+        // Convert to new format since 2020-02-04, can be removed in future
+        $redis = $this->setupRedis();
+        if ($redis && ($redis->exists('misp:feed_cache:combined') || $redis->exists('misp:server_cache:combined'))) {
+            $this->convertToNewRedisCacheFormat();
+        }
+    }
+
+    /**
+     * Cleanup of empty belongsto relationships
+     * @param mixed $results
+     * @param false $primary
+     * @return mixed
      */
     public function afterFind($results, $primary = false)
     {
@@ -121,11 +138,7 @@ class Feed extends AppModel
 
     public function getFeedTypesOptions()
     {
-        $result = array();
-        foreach ($this->feed_types as $key => $value) {
-            $result[$key] = $value['name'];
-        }
-        return $result;
+        return array_column($this->feed_types, 'name');
     }
 
     /**
@@ -169,7 +182,7 @@ class Feed extends AppModel
      * @return Generator
      * @throws Exception
      */
-    public function getCache(array $feed, HttpSocket $HttpSocket = null)
+    private function getCache(array $feed, HttpSocket $HttpSocket = null)
     {
         $uri = $feed['Feed']['url'] . '/hashes.csv';
         $data = $this->feedGetUri($feed, $uri, $HttpSocket);
@@ -301,7 +314,7 @@ class Feed extends AppModel
                 'fields' => array('id', 'name', 'url', 'provider', 'source_format')
             ));
             foreach ($feeds as $k => $v) {
-                if (!$redis->exists('misp:feed_cache:' . $v['Feed']['id'])) {
+                if (!$redis->exists('misp:cache:F' . $v['Feed']['id'])) {
                     unset($feeds[$k]);
                 }
             }
@@ -319,7 +332,7 @@ class Feed extends AppModel
             }
             if ($redis) {
                 foreach ($feeds as $k => $v) {
-                    if ($redis->sismember('misp:feed_cache:' . $v['Feed']['id'], md5($value['value']))) {
+                    if ($redis->sismember('misp:cache:F' . $v['Feed']['id'], md5($value['value'], true))) {
                         $data[$key]['feed_correlations'][] = array($v);
                     }
                 }
@@ -334,12 +347,15 @@ class Feed extends AppModel
      * @param array $attributes
      * @param array $user
      * @param array $event
-     * @param bool $overrideLimit Override hardcoded limit for 10 000 correlations.
-     * @param string $scope `Feed` or `Server`
+     * @param string $scope `Feed`, `Server` or `Both`
      * @return array
      */
-    public function attachFeedCorrelations(array $attributes, array $user, array &$event, $overrideLimit = false, $scope = 'Feed')
+    public function attachFeedCorrelations(array $attributes, array $user, array &$event, $scope = 'Feed')
     {
+        if (!in_array($scope, ['Feed', 'Server', 'Both'], true)) {
+            throw new InvalidArgumentException("Invalid scope `$scope` provided.");
+        }
+
         if (empty($attributes)) {
             return $attributes;
         }
@@ -350,20 +366,12 @@ class Feed extends AppModel
             return $attributes;
         }
 
-        $cachePrefix = 'misp:' . strtolower($scope) . '_cache:';
-
-        // Skip if redis cache for $scope is empty.
-        if ($redis->sCard($cachePrefix . 'combined') === 0) {
-            return $attributes;
-        }
-
         if (!isset($this->Attribute)) {
             $this->Attribute = ClassRegistry::init('Attribute');
         }
         $compositeTypes = $this->Attribute->getCompositeTypes();
 
-        $pipe = $redis->multi(Redis::PIPELINE);
-        $hashTable = [];
+        $pipe = $redis->pipeline();
         $redisResultToAttributePosition = [];
 
         foreach ($attributes as $k => $attribute) {
@@ -395,121 +403,93 @@ class Feed extends AppModel
             }
 
             foreach ($parts as $part) {
-                $md5 = md5($part);
-                $hashTable[] = $md5;
-                $redis->sismember($cachePrefix . 'combined', $md5);
+                $redis->hGetAll(self::REDIS_CACHE_PREFIX . md5($part, true));
                 $redisResultToAttributePosition[] = $k;
             }
         }
 
         if (empty($redisResultToAttributePosition)) {
-            // No attribute that can be correlated
             $pipe->discard();
+            // No attribute that can be correlated
             return $attributes;
         }
 
         $results = $pipe->exec();
 
-        $hitIds = [];
+        $sources = null;
         foreach ($results as $k => $result) {
-            if ($result) {
-                $hitIds[] = $k;
+            if (!$result) {
+                continue;
             }
-        }
-
-        if (empty($hitIds)) {
-            return $attributes; // nothing matches, skip
-        }
-
-        $hitCount = count($hitIds);
-        if (!$overrideLimit && $hitCount > 10000) {
-            $event['FeedCount'] = $hitCount;
-            foreach ($hitIds as $k) {
-                $attributes[$redisResultToAttributePosition[$k]]['FeedHit'] = true;
+            if (!isset($sources)) {
+                $sources = $this->getCachedFeedsOrServers($user, $scope); // lazy load sources
             }
-            return $attributes;
-        }
-
-        $sources = $this->getCachedFeedsOrServers($user, $scope);
-        foreach ($sources as $source) {
-            $sourceId = $source[$scope]['id'];
-
-            $pipe = $redis->multi(Redis::PIPELINE);
-            foreach ($hitIds as $k) {
-                $redis->sismember($cachePrefix . $sourceId, $hashTable[$k]);
-            }
-            $sourceHits = $pipe->exec();
-            $sourceHasHit = false;
-            foreach ($sourceHits as $k => $hit) {
-                if ($hit) {
-                    if (!isset($event[$scope][$sourceId])) {
-                        $event[$scope][$sourceId] = $source[$scope];
-                    }
-
-                    $attributePosition = $redisResultToAttributePosition[$hitIds[$k]];
-                    $alreadyAttached = isset($attributes[$attributePosition][$scope]) &&
-                        in_array($sourceId, array_column($attributes[$attributePosition][$scope], 'id'));
-                    if (!$alreadyAttached) {
-                        $attributes[$attributePosition][$scope][] = $source[$scope];
-                    }
-                    $sourceHasHit = true;
+            foreach ($result as $sourceId => $uuids) {
+                if (!isset($sources[$sourceId])) {
+                    continue; // source is not enabled
                 }
-            }
-            // Append also exact MISP feed or server event UUID
-            // TODO: This can be optimised in future to do that in one pass
-            if ($sourceHasHit && ($scope === 'Server' || $source[$scope]['source_format'] === 'misp')) {
-                $pipe = $redis->multi(Redis::PIPELINE);
-                $eventUuidHitPosition = [];
-                foreach ($hitIds as $sourceHitPos => $k) {
-                    if ($sourceHits[$sourceHitPos]) {
-                        $redis->smembers($cachePrefix . 'event_uuid_lookup:' . $hashTable[$k]);
-                        $eventUuidHitPosition[] = $redisResultToAttributePosition[$k];
+                $scopeForSource = $sourceId[0] === 'S' ? 'Server' : 'Feed';
+                if (!isset($event[$scopeForSource][$sourceId])) {
+                    $event[$scopeForSource][$sourceId] = $sources[$sourceId];
+                }
+                if ($uuids) {
+                    $uuids = explode(',', $uuids);
+                    // Attach event UUIDs to Server or Feed
+                    foreach ($uuids as $uuid) {
+                        if (!isset($event[$scopeForSource][$sourceId]['event_uuids']) || !in_array($uuid, $event[$scopeForSource][$sourceId]['event_uuids'], true)) {
+                            $event[$scopeForSource][$sourceId]['event_uuids'][] = $uuid;
+                        }
                     }
                 }
-                $mispFeedHits = $pipe->exec();
-                foreach ($mispFeedHits as $sourceHitPos => $feedUuidMatches) {
-                    if (empty($feedUuidMatches)) {
-                        continue;
-                    }
-                    foreach ($feedUuidMatches as $url) {
-                        list($feedId, $eventUuid) = explode('/', $url);
-                        if ($feedId != $sourceId) {
-                            continue; // just process current source, skip others
-                        }
 
-                        if (empty($event[$scope][$feedId]['event_uuids']) || !in_array($eventUuid, $event[$scope][$feedId]['event_uuids'])) {
-                            $event[$scope][$feedId]['event_uuids'][] = $eventUuid;
-                        }
-                        $attributePosition = $eventUuidHitPosition[$sourceHitPos];
-                        foreach ($attributes[$attributePosition][$scope] as $tempKey => $tempFeed) {
-                            if ($tempFeed['id'] == $feedId) {
-                                if (empty($attributes[$attributePosition][$scope][$tempKey]['event_uuids']) || !in_array($eventUuid, $attributes[$attributePosition][$scope][$tempKey]['event_uuids'])) {
-                                    $attributes[$attributePosition][$scope][$tempKey]['event_uuids'][] = $eventUuid;
+                $attributePosition = $redisResultToAttributePosition[$k];
+
+                $found = false;
+                if (isset($attributes[$attributePosition][$scopeForSource])) {
+                    foreach ($attributes[$attributePosition][$scopeForSource] as &$existing) {
+                        if ($existing['id'] == $sources[$sourceId]['id']) {
+                            $found = true;
+                            if ($uuids) {
+                                foreach ($uuids as $uuid) {
+                                    if (!isset($existing['event_uuids']) || !in_array($uuid, $existing['event_uuids'], true)) {
+                                        $existing['event_uuids'][] = $uuid;
+                                    }
                                 }
-                                break;
                             }
+                            break;
                         }
                     }
+                }
+
+                if (!$found) {
+                    $value = $sources[$sourceId];
+                    if ($uuids) {
+                        $value['event_uuids'] = $uuids;
+                    }
+                    $attributes[$attributePosition][$scopeForSource][] = $value;
                 }
             }
         }
 
-        if (isset($event[$scope])) {
-            $event[$scope] = array_values($event[$scope]);
+        if (isset($event['Feed'])) {
+            $event['Feed'] = array_values($event['Feed']);
+        }
+        if (isset($event['Server'])) {
+            $event['Server'] = array_values($event['Server']);
         }
 
         return $attributes;
     }
 
     /**
-     * Return just feeds or servers that has some data in Redis cache.
      * @param array $user
-     * @param string $scope 'Feed' or 'Server'
-     * @return array
+     * @param string $scope 'Feed', 'Server' or 'Both'
+     * @return array Where key is Feed or Server ID prefixed by 'F' or 'S' letter
      */
     private function getCachedFeedsOrServers(array $user, $scope)
     {
-        if ($scope === 'Feed') {
+        $output = [];
+        if ($scope === 'Feed' || $scope === 'Both') {
             $params = array(
                 'recursive' => -1,
                 'fields' => array('id', 'name', 'url', 'provider', 'source_format')
@@ -517,8 +497,13 @@ class Feed extends AppModel
             if (!$user['Role']['perm_site_admin']) {
                 $params['conditions'] = array('Feed.lookup_visible' => 1);
             }
-            $sources = $this->find('all', $params);
-        } else {
+            $feeds = $this->find('all', $params);
+            foreach ($feeds as $feed) {
+                $output['F' . $feed['Feed']['id']] = $feed['Feed'];
+            }
+        }
+
+        if ($scope === 'Server' || $scope === 'Both') {
             $params = array(
                 'recursive' => -1,
                 'fields' => array('id', 'name', 'url')
@@ -527,25 +512,13 @@ class Feed extends AppModel
                 $params['conditions'] = array('Server.caching_enabled' => 1);
             }
             $this->Server = ClassRegistry::init('Server');
-            $sources = $this->Server->find('all', $params);
+            $servers = $this->Server->find('all', $params);
+            foreach ($servers as $server) {
+                $output['S' . $server['Server']['id']] = $server['Server'];
+            }
         }
 
-        try {
-            $redis = $this->setupRedisWithException();
-            $pipe = $redis->multi(Redis::PIPELINE);
-            $cachePrefix = 'misp:' . strtolower($scope) . '_cache:';
-            foreach ($sources as $source) {
-                $pipe->exists($cachePrefix . $source[$scope]['id']);
-            }
-            $results = $pipe->exec();
-            foreach ($sources as $k => $source) {
-                if (!$results[$k]) {
-                    unset($sources[$k]);
-                }
-            }
-        } catch (Exception $e) {}
-
-        return $sources;
+        return $output;
     }
 
     public function downloadFromFeed($actions, $feed, HttpSocket $HttpSocket = null, $user, $jobId = false)
@@ -1142,14 +1115,10 @@ class Feed extends AppModel
             } elseif ($scope == 'freetext' || $scope == 'csv') {
                 $params['conditions']['source_format'] = array('csv', 'freetext');
             } elseif ($scope == 'misp') {
-                $redis->del($redis->keys('misp:feed_cache:event_uuid_lookup:*'));
                 $params['conditions']['source_format'] = 'misp';
             } else {
                 throw new InvalidArgumentException("Invalid value for scope, it must be integer or 'freetext', 'csv', 'misp' or 'all' string.");
             }
-        } else {
-            $redis->del('misp:feed_cache:combined');
-            $redis->del($redis->keys('misp:feed_cache:event_uuid_lookup:*'));
         }
         $feeds = $this->find('all', $params);
 
@@ -1182,7 +1151,7 @@ class Feed extends AppModel
 
         $pipe = $redis->multi(Redis::PIPELINE);
         foreach ($feeds as $feed) {
-            $pipe->get('misp:feed_cache_timestamp:' . $feed['Feed']['id']);
+            $pipe->get('misp:cache_timestamp:F' . $feed['Feed']['id']);
         }
         $result = $redis->exec();
         foreach ($feeds as $k => $feed) {
@@ -1207,6 +1176,7 @@ class Feed extends AppModel
      * @param HttpSocket|null $HttpSocket
      * @param int|false $jobId
      * @return bool
+     * @throws Exception
      */
     private function __cacheFreetextFeed(array $feed, $redis, HttpSocket $HttpSocket = null, $jobId = false)
     {
@@ -1223,27 +1193,28 @@ class Feed extends AppModel
         }
 
         // Convert values to MD5 hashes
-        $md5Values = array_map('md5', array_column($values, 'value'));
-
-        $redis->del('misp:feed_cache:' . $feedId);
-        foreach (array_chunk($md5Values, 5000) as $k => $chunk) {
-            $pipe = $redis->multi(Redis::PIPELINE);
-            if (method_exists($redis, 'sAddArray')) {
-                $redis->sAddArray('misp:feed_cache:' . $feedId, $chunk);
-                $redis->sAddArray('misp:feed_cache:combined', $chunk);
-            } else {
-                foreach ($chunk as $value) {
-                    $redis->sAdd('misp:feed_cache:' . $feedId, $value);
-                    $redis->sAdd('misp:feed_cache:combined', $value);
+        $iterator = function () use ($values, $jobId, $feedId) {
+            $count = count($values);
+            foreach ($values as $i => $value) {
+                yield md5($value['value'], true);
+                if ($i % 5000 === 0) {
+                    $progress = $i === 0 ? 0 : ($count / $i) * 100;
+                    $this->jobProgress($jobId, __('Feed %s: %s/%s values cached.', $feedId, $i, $count), $progress);
                 }
             }
-            $pipe->exec();
-            $this->jobProgress($jobId, __('Feed %s: %s/%s values cached.', $feedId, $k * 5000, count($md5Values)));
-        }
-        $redis->set('misp:feed_cache_timestamp:' . $feedId, time());
+        };
+
+        $this->insertToRedisCache('feed', $feedId, $iterator());
         return true;
     }
 
+    /**
+     * @param $feed
+     * @param $redis
+     * @param HttpSocket|null $HttpSocket
+     * @param false $jobId
+     * @return false|Generator
+     */
     private function __cacheMISPFeedTraditional($feed, $redis, HttpSocket $HttpSocket = null, $jobId = false)
     {
         $feedId = $feed['Feed']['id'];
@@ -1254,20 +1225,17 @@ class Feed extends AppModel
             return false;
         }
 
-        $redis->del('misp:feed_cache:' . $feedId);
-
+        $this->Attribute = ClassRegistry::init('Attribute');
         $k = 0;
         foreach ($manifest as $uuid => $event) {
             try {
                 $event = $this->downloadAndParseEventFromFeed($feed, $uuid, $HttpSocket);
             } catch (Exception $e) {
                 $this->logException("Could not get and parse event '$uuid' for feed $feedId.", $e);
-                return false;
+                continue;
             }
 
             if (!empty($event['Event']['Attribute'])) {
-                $this->Attribute = ClassRegistry::init('Attribute');
-                $pipe = $redis->multi(Redis::PIPELINE);
                 foreach ($event['Event']['Attribute'] as $attribute) {
                     if (!in_array($attribute['type'], $this->Attribute->nonCorrelatingTypes)) {
                         if (in_array($attribute['type'], $this->Attribute->getCompositeTypes())) {
@@ -1280,25 +1248,28 @@ class Feed extends AppModel
                         }
 
                         foreach ($value as $v) {
-                            $md5 = md5($v);
-                            $redis->sAdd('misp:feed_cache:' . $feedId, $md5);
-                            $redis->sAdd('misp:feed_cache:combined', $md5);
-                            $redis->sAdd('misp:feed_cache:event_uuid_lookup:' . $md5, $feedId . '/' . $event['Event']['uuid']);
+                            yield [md5($v, true), $event['Event']['uuid']];
                         }
                     }
                 }
-                $pipe->exec();
             }
 
             $k++;
-            if ($k % 10 == 0) {
+            if ($k % 10 === 0) {
                 $this->jobProgress($jobId, "Feed $feedId: $k/" . count($manifest) . " events cached.");
             }
         }
-        return true;
     }
 
-    private function __cacheMISPFeedCache($feed, $redis, HttpSocket $HttpSocket = null, $jobId = false)
+    /**
+     * @param array $feed
+     * @param Redis $redis
+     * @param HttpSocket|null $HttpSocket
+     * @param int|false $jobId
+     * @return bool
+     * @throws Exception
+     */
+    private function __cacheMISPFeedCache(array $feed, $redis, HttpSocket $HttpSocket = null, $jobId = false)
     {
         $feedId = $feed['Feed']['id'];
 
@@ -1309,16 +1280,15 @@ class Feed extends AppModel
             return false;
         }
 
-        $pipe = $redis->multi(Redis::PIPELINE);
-        $redis->del('misp:feed_cache:' . $feedId);
-        foreach ($cache as $v) {
-            list($hash, $eventUuid) = $v;
-            $redis->sAdd('misp:feed_cache:' . $feedId, $hash);
-            $redis->sAdd('misp:feed_cache:combined', $hash);
-            $redis->sAdd('misp:feed_cache:event_uuid_lookup:' . $hash, "$feedId/$eventUuid");
-        }
-        $pipe->exec();
-        $this->jobProgress($jobId, "Feed $feedId: cached via quick cache.");
+        $iterator = function ($cache) {
+            foreach ($cache as $c) {
+                yield [hex2bin($c[0]), $c[1]]; // Convert hash to binary format
+            }
+        };
+
+        $this->insertToRedisCache('feed', $feedId, $iterator($cache), true);
+
+        $this->jobProgress($jobId, __("Feed %s: cached via quick cache.", $feedId));
         return true;
     }
 
@@ -1327,14 +1297,14 @@ class Feed extends AppModel
         $result = true;
         if (!$this->__cacheMISPFeedCache($feed, $redis, $HttpSocket, $jobId)) {
             $result = $this->__cacheMISPFeedTraditional($feed, $redis, $HttpSocket, $jobId);
-        }
-        if ($result) {
-            $redis->set('misp:feed_cache_timestamp:' . $feed['Feed']['id'], time());
+            if ($result) {
+                $this->insertToRedisCache('feed', $feed['Feed']['id'], $result, true);
+            }
         }
         return $result;
     }
 
-    public function compareFeeds($id = false)
+    public function compareFeeds()
     {
         $redis = $this->setupRedis();
         if ($redis === false) {
@@ -1351,11 +1321,11 @@ class Feed extends AppModel
         $fields = array_flip($fields);
         // Get all of the feed cache cardinalities for all feeds - if a feed is not cached remove it from the list
         foreach ($feeds as $k => $feed) {
-            if (!$redis->exists('misp:feed_cache:' . $feed['Feed']['id'])) {
+            if (!$redis->exists(self::REDIS_CACHE_PREFIX . 'F' . $feed['Feed']['id'])) {
                 unset($feeds[$k]);
                 continue;
             }
-            $feeds[$k]['Feed']['values'] = $redis->sCard('misp:feed_cache:' . $feed['Feed']['id']);
+            $feeds[$k]['Feed']['values'] = $redis->sCard(self::REDIS_CACHE_PREFIX . 'F' . $feed['Feed']['id']);
         }
         $feeds = array_values($feeds);
         $this->Server = ClassRegistry::init('Server');
@@ -1366,7 +1336,7 @@ class Feed extends AppModel
             'conditions' => array('Server.caching_enabled' => 1)
         ));
         foreach ($servers as $k => $server) {
-            if (!$redis->exists('misp:server_cache:' . $server['Server']['id'])) {
+            if (!$redis->exists(self::REDIS_CACHE_PREFIX . 'S' . $server['Server']['id'])) {
                 unset($servers[$k]);
                 continue;
             }
@@ -1375,21 +1345,21 @@ class Feed extends AppModel
             $servers[$k]['Server']['provider'] = $servers[$k]['RemoteOrg']['name'];
             $servers[$k]['Server']['default'] = false;
             $servers[$k]['Server']['is_misp_server'] = true;
-            $servers[$k]['Server']['values'] = $redis->sCard('misp:server_cache:' . $server['Server']['id']);
+            $servers[$k]['Server']['values'] = $redis->sCard(self::REDIS_CACHE_PREFIX . 'S' . $server['Server']['id']);
         }
         foreach ($feeds as $k => $feed) {
             foreach ($feeds as $k2 => $feed2) {
                 if ($k == $k2) {
                     continue;
                 }
-                $intersect = $redis->sInter('misp:feed_cache:' . $feed['Feed']['id'], 'misp:feed_cache:' . $feed2['Feed']['id']);
+                $intersect = $redis->sInter('misp:cache:F' . $feed['Feed']['id'], 'misp:cache:F' . $feed2['Feed']['id']);
                 $feeds[$k]['Feed']['ComparedFeed'][] = array_merge(array_intersect_key($feed2['Feed'], $fields), array(
                     'overlap_count' => count($intersect),
                     'overlap_percentage' => round(100 * count($intersect) / $feeds[$k]['Feed']['values']),
                 ));
             }
             foreach ($servers as $k2 => $server) {
-                $intersect = $redis->sInter('misp:feed_cache:' . $feed['Feed']['id'], 'misp:server_cache:' . $server['Server']['id']);
+                $intersect = $redis->sInter('misp:cache:F' . $feed['Feed']['id'], 'misp:cache:S' . $server['Server']['id']);
                 $feeds[$k]['Feed']['ComparedFeed'][] = array_merge(array_intersect_key($server['Server'], $fields), array(
                     'overlap_count' => count($intersect),
                     'overlap_percentage' => round(100 * count($intersect) / $feeds[$k]['Feed']['values']),
@@ -1398,7 +1368,7 @@ class Feed extends AppModel
         }
         foreach ($servers as $k => $server) {
             foreach ($feeds as $k2 => $feed2) {
-                $intersect = $redis->sInter('misp:server_cache:' . $server['Server']['id'], 'misp:feed_cache:' . $feed2['Feed']['id']);
+                $intersect = $redis->sInter('misp:cache:S' . $server['Server']['id'], 'misp:cache:F' . $feed2['Feed']['id']);
                 $servers[$k]['Server']['ComparedFeed'][] = array_merge(array_intersect_key($feed2['Feed'], $fields), array(
                     'overlap_count' => count($intersect),
                     'overlap_percentage' => round(100 * count($intersect) / $servers[$k]['Server']['values']),
@@ -1408,7 +1378,7 @@ class Feed extends AppModel
                 if ($k == $k2) {
                     continue;
                 }
-                $intersect = $redis->sInter('misp:server_cache:' . $server['Server']['id'], 'misp:server_cache:' . $server2['Server']['id']);
+                $intersect = $redis->sInter('misp:cache:S' . $server['Server']['id'], 'misp:cache:S' . $server2['Server']['id']);
                 $servers[$k]['Server']['ComparedFeed'][] = array_merge(array_intersect_key($server2['Server'], $fields), array(
                     'overlap_count' => count($intersect),
                     'overlap_percentage' => round(100 * count($intersect) / $servers[$k]['Server']['values']),
@@ -1522,28 +1492,26 @@ class Feed extends AppModel
                 $server_conditions['OR'] = array('Server.id' => $dataset['Server']);
             }
         }
-        $other_feeds = $this->find('list', array(
-            'recursive' => -1,
+        $other_feeds = $this->find('column', array(
             'conditions' => $feed_conditions,
-            'fields' => array('Feed.id', 'Feed.id')
+            'fields' => array('Feed.id')
         ));
-        $other_servers = $this->Server->find('list', array(
-            'recursive' => -1,
+        $other_servers = $this->Server->find('column', array(
             'conditions' => $server_conditions,
-            'fields' => array('Server.id', 'Server.id')
+            'fields' => array('Server.id')
         ));
-        $feed_element_count = $redis->scard('misp:feed_cache:' . $id);
+        $feed_element_count = $redis->scard('misp:cache:F' . $id);
         $temp_store = (new RandomTool())->random_str(false, 12);
         $params = array('misp:feed_temp:' . $temp_store);
         foreach ($other_feeds as $other_feed) {
-            $params[] = 'misp:feed_cache:' . $other_feed;
+            $params[] = 'misp:cache:F' . $other_feed;
         }
         foreach ($other_servers as $other_server) {
-            $params[] = 'misp:server_cache:' . $other_server;
+            $params[] = 'misp:cache:S' . $other_server;
         }
         if (count($params) != 1 && $feed_element_count > 0) {
             call_user_func_array(array($redis, 'sunionstore'), $params);
-            call_user_func_array(array($redis, 'sinterstore'), array('misp:feed_temp:' . $temp_store . '_intersect', 'misp:feed_cache:' . $id, 'misp:feed_temp:' . $temp_store));
+            call_user_func_array(array($redis, 'sinterstore'), array('misp:feed_temp:' . $temp_store . '_intersect', 'misp:cache:F' . $id, 'misp:feed_temp:' . $temp_store));
             $cardinality_intersect = $redis->scard('misp:feed_temp:' . $temp_store . '_intersect');
             $coverage = round(100 * $cardinality_intersect / $feed_element_count, 2);
             $redis->del('misp:feed_temp:' . $temp_store);
@@ -1557,11 +1525,12 @@ class Feed extends AppModel
     public function getCachedElements($feedId)
     {
         $redis = $this->setupRedis();
-        $cardinality = $redis->sCard('misp:feed_cache:' . $feedId);
+        $cardinality = $redis->sCard('misp:cache:F' . $feedId);
         return $cardinality;
     }
 
-    public function getAllCachingEnabledFeeds($feedId, $intersectingOnly = false) {
+    public function getAllCachingEnabledFeeds($feedId, $intersectingOnly = false)
+    {
         if ($intersectingOnly) {
             $redis = $this->setupRedis();
         }
@@ -1591,7 +1560,8 @@ class Feed extends AppModel
             foreach ($scopes as $scope) {
                 if (!empty($result[$scope])) {
                     foreach ($result[$scope] as $k => $feed) {
-                        $intersect = $redis->sInter('misp:feed_cache:' . $feedId, 'misp:' . lcfirst($scope) . '_cache:' . $feed['id']);
+                        $otherKey = 'misp:cache:' . ($scope === 'Server' ? 'S' : 'F') . $feed['id'];
+                        $intersect = $redis->sInter('misp:cache:F' . $feedId, $otherKey);
                         if (empty($intersect)) {
                             unset($result[$scope][$k]);
                         } else {
@@ -1607,95 +1577,79 @@ class Feed extends AppModel
     public function searchCaches($value)
     {
         $value = strtolower(trim($value));
-        $hits = array();
+
+        $sources = [];
+        $feeds = $this->find('all', array(
+            'conditions' => array('caching_enabled' => 1),
+            'recursive' => -1,
+            'fields' => array('Feed.id', 'Feed.name', 'Feed.url', 'Feed.source_format')
+        ));
+        foreach ($feeds as $feed) {
+            $sources['F' . $feed['Feed']['id']] = $feed['Feed'];
+        }
+
         $this->Server = ClassRegistry::init('Server');
-        $result['Server'] = $this->Server->find('all', array(
-            'conditions' => array(
-                'caching_enabled' => 1
-            ),
+        $servers = $this->Server->find('all', array(
+            'conditions' => array('caching_enabled' => 1),
             'recursive' => -1,
             'fields' => array('Server.id', 'Server.name', 'Server.url')
         ));
-        $redis = $this->setupRedis();
-        if (empty($value) || $redis->sismember('misp:feed_cache:combined', md5($value))) {
-            $feeds = $this->find('all', array(
-                'conditions' => array(
-                    'caching_enabled' => 1
-                ),
-                'recursive' => -1,
-                'fields' => array('Feed.id', 'Feed.name', 'Feed.url', 'Feed.source_format')
-            ));
-            foreach ($feeds as $feed) {
-                if (empty($value) || $redis->sismember('misp:feed_cache:' . $feed['Feed']['id'], md5($value))) {
-                    if ($feed['Feed']['source_format'] === 'misp') {
-                        $uuid = $redis->smembers('misp:feed_cache:event_uuid_lookup:' . md5($value));
-                        foreach ($uuid as $k => $url) {
-                            $uuid[$k] = explode('/', $url)[1];
-                        }
-                        $feed['Feed']['uuid'] = $uuid;
-                        if (!empty($feed['Feed']['uuid'])) {
-                            foreach ($feed['Feed']['uuid'] as $uuid) {
-                                $feed['Feed']['direct_urls'][] = array(
-                                    'url' => sprintf(
-                                        '%s/feeds/previewEvent/%s/%s',
-                                        Configure::read('MISP.baseurl'),
-                                        h($feed['Feed']['id']),
-                                        h($uuid)
-                                    ),
-                                    'name' => __('Event %s', $uuid)
-                                );
-                            }
-                        }
-                        $feed['Feed']['type'] = 'MISP Feed';
-                    } else {
-                        $feed['Feed']['type'] = 'Feed';
-                        if (!empty($value)) {
-                            $feed['Feed']['direct_urls'][] = array(
-                                'url' => sprintf(
-                                    '%s/feeds/previewIndex/%s',
-                                    Configure::read('MISP.baseurl'),
-                                    h($feed['Feed']['id'])
-                                ),
-                                'name' => __('Feed %s', $feed['Feed']['id'])
-                            );
-                        }
-                    }
-                    $hits[] = $feed;
-                }
-            }
+        foreach ($servers as $server) {
+            $sources['S' . $server['Server']['id']] = $server['Server'];
         }
-        if (empty($value) || $redis->sismember('misp:server_cache:combined', md5($value))) {
-            $this->Server = ClassRegistry::init('Server');
-            $servers = $this->Server->find('all', array(
-                'conditions' => array(
-                    'caching_enabled' => 1
-                ),
-                'recursive' => -1,
-                'fields' => array('Server.id', 'Server.name', 'Server.url')
-            ));
-            foreach ($servers as $server) {
-                if (empty($value) || $redis->sismember('misp:server_cache:' . $server['Server']['id'], md5($value))) {
-                    $uuid = $redis->smembers('misp:server_cache:event_uuid_lookup:' . md5($value));
-                    if (!empty($uuid)) {
-                        foreach ($uuid as $k => $url) {
-                            $uuid[$k] = explode('/', $url)[1];
-                            $server['Server']['direct_urls'][] = array(
-                                'url' => sprintf(
-                                    '%s/servers/previewEvent/%s/%s',
-                                    Configure::read('MISP.baseurl'),
-                                    h($server['Server']['id']),
-                                    h($uuid[$k])
-                                ),
-                                'name' => __('Event %s', h($uuid[$k]))
-                            );
-                        }
-                    }
-                    $server['Server']['uuid'] = $uuid;
-                    $server['Server']['type'] = 'MISP Server';
-                    $hits[] = array('Feed' => $server['Server']);
-                }
+
+        $redis = $this->setupRedisWithException();
+        $results = $redis->hGetAll('misp:cache:' . md5($value, true));
+
+        $hits = [];
+        foreach ($results as $sourceId => $uuids) {
+            if (!isset($sources[$sourceId])) {
+                continue;
             }
+            $hit = $sources[$sourceId];
+            if ($uuids) {
+                $isServer = $sourceId[0] === 'S';
+                $hit['type'] = $isServer ? 'MISP Server' : 'MISP Feed';
+                $hit['uuid'] = explode(',', $uuids);
+                if ($isServer) {
+                    foreach ($hit['uuid'] as $uuid) {
+                        $hit['direct_urls'][] = array(
+                            'url' => sprintf(
+                                '%s/servers/previewEvent/%s/%s',
+                                Configure::read('MISP.baseurl'),
+                                h($hit['id']),
+                                h($uuid)
+                            ),
+                            'name' => __('Event %s', h($uuid))
+                        );
+                    }
+                } else {
+                    foreach ($hit['uuid'] as $uuid) {
+                        $hit['direct_urls'][] = array(
+                            'url' => sprintf(
+                                '%s/feeds/previewEvent/%s/%s',
+                                Configure::read('MISP.baseurl'),
+                                h($hit['id']),
+                                h($uuid)
+                            ),
+                            'name' => __('Event %s', $uuid)
+                        );
+                    }
+                }
+            } else {
+                $hit['type'] = 'Feed';
+                $hit['direct_urls'][] = array(
+                    'url' => sprintf(
+                        '%s/feeds/previewIndex/%s',
+                        Configure::read('MISP.baseurl'),
+                        h($hit['id'])
+                    ),
+                    'name' => __('Feed %s', h($hit['id']))
+                );
+            }
+            $hits[] = ['Feed' => $hit];
         }
+
         return $hits;
     }
 
@@ -1937,5 +1891,135 @@ class Feed extends AppModel
         }
         $unzipped->delete();
         return $data;
+    }
+
+    /**
+     * Insert feed to Redis cache.
+     *
+     * @param string $type Can be 'feed' or 'server'
+     * @param int $sourceId Server or Feed ID
+     * @param Iterator|array $values Values can be array of binary MD5 hash when $withEventUuid is false or
+     * array of arrays [binary MD5, eventUuid] when $withEventUuid is true.
+     * @param bool $withEventUuid
+     * @throws Exception
+     */
+    public function insertToRedisCache($type, $sourceId, Iterator $values, $withEventUuid = false)
+    {
+        if (!in_array($type, ['server', 'feed'], true)) {
+            throw new InvalidArgumentException();
+        }
+        $source = ($type === 'server' ? 'S' : 'F') . $sourceId;
+
+        $redis = $this->setupRedisWithException();
+
+        // Delete existing values from current feed
+        $existingMembers = $redis->sMembers(self::REDIS_CACHE_PREFIX . $source);
+        if (!empty($existingMembers)) {
+            $pipe = $redis->pipeline();
+            foreach ($existingMembers as $hash) {
+                $pipe->hDel(self::REDIS_CACHE_PREFIX . $hash, $source);
+            }
+            $pipe->del(self::REDIS_CACHE_PREFIX . $source);
+            $pipe->exec();
+        }
+
+        if ($withEventUuid) {
+            // TODO: Maybe to split
+            $toInsert = [];
+            foreach ($values as $value) {
+                list($hash, $eventUuid) = $value;
+                if (isset($toInsert[$hash])) {
+                    if (strpos($toInsert[$hash], $eventUuid) === false) { // do not insert duplicates
+                        $toInsert[$hash] .= ',' . $eventUuid;
+                    }
+                } else {
+                    $toInsert[$hash] = $eventUuid;
+                }
+            }
+            $pipe = $redis->pipeline();
+            foreach ($toInsert as $hash => $value) {
+                $pipe->sAdd(self::REDIS_CACHE_PREFIX . $source, $hash);
+                $pipe->hSet(self::REDIS_CACHE_PREFIX . $hash, $source, $value);
+            }
+            $pipe->exec();
+        } else {
+            $pipe = $redis->pipeline();
+            foreach ($values as $hash) {
+                $pipe->sAdd(self::REDIS_CACHE_PREFIX . $source, $hash);
+                $pipe->hSet(self::REDIS_CACHE_PREFIX . $hash, $source, 0);
+            }
+            $pipe->exec();
+        }
+        $redis->set('misp:cache_timestamp:' . $source, time());
+    }
+
+    /**
+     * Convert to new format, old format was used before 2.4.140
+     * @throws Exception
+     */
+    private function convertToNewRedisCacheFormat()
+    {
+        $redis = $this->setupRedisWithException();
+
+        $this->Server = ClassRegistry::init('Server');
+        $serverIds = $this->Server->find('column', ['fields' => ['id']]);
+
+        foreach ($serverIds as $serverId) {
+            $sourceHashes = $redis->sMembers('misp:server_cache:' . $serverId);
+            $hashToInsert = [];
+            foreach ($sourceHashes as $sourceHash) {
+                $hashToInsert[] = hex2bin($sourceHash);
+                $uuids = $redis->sMembers('misp:server_cache:' . $sourceHash);
+                if ($uuids) {
+                    $uuidToInsert = [];
+                    foreach ($uuids as $uuid) {
+                        $parts = explode('/', $uuid);
+                        if ($parts[0] == $serverId) {
+                            $uuidToInsert[] = $parts[1];
+                        }
+                    }
+                    $uuidToInsert = empty($uuidToInsert) ? 0 : implode(',', $uuidToInsert);
+                } else {
+                    $uuidToInsert = 0;
+                }
+                $redis->hSet(self::REDIS_CACHE_PREFIX . hex2bin($sourceHash), 'S' . $serverId, $uuidToInsert);
+            }
+            $redis->sAddArray(self::REDIS_CACHE_PREFIX . 'S' . $serverId, $hashToInsert);
+            $redis->set('misp:cache_timestamp:S' . $serverId, $redis->get('misp:server_cache_timestamp:' . $serverId));
+            $redis->del('misp:server_cache:' . $serverId);
+        }
+
+        $feedIds = $this->find('column', ['fields' => ['id']]);
+
+        foreach ($feedIds as $feedId) {
+            $sourceHashes = $redis->sMembers('misp:feed_cache:' . $feedId);
+            $hashToInsert = [];
+            foreach ($sourceHashes as $sourceHash) {
+                $hashToInsert[] = hex2bin($sourceHash);
+                $uuids = $redis->sMembers('misp:feed_cache:' . $sourceHash);
+                if ($uuids) {
+                    $uuidToInsert = [];
+                    foreach ($uuids as $uuid) {
+                        $parts = explode('/', $uuid);
+                        if ($parts[0] == $feedId) {
+                            $uuidToInsert[] = $parts[1];
+                        }
+                    }
+                    $uuidToInsert = empty($uuidToInsert) ? 0 : implode(',', $uuidToInsert);
+                } else {
+                    $uuidToInsert = 0;
+                }
+                $redis->hSet(self::REDIS_CACHE_PREFIX . hex2bin($sourceHash), 'F' . $feedId, $uuidToInsert);
+            }
+
+            $redis->sAddArray(self::REDIS_CACHE_PREFIX . 'F' . $feedId, $hashToInsert);
+            $redis->set('misp:cache_timestamp:F' . $feedId, $redis->get('misp:feed_cache_timestamp:' . $feedId));
+            $redis->del('misp:feed_cache:' . $feedId);
+        }
+
+        // Delete old keys
+        $redis->del('misp:feed_cache:combined', 'misp:server_cache:combined');
+        $redis->del($redis->keys('misp:feed_cache_timestamp:*'));
+        $redis->del($redis->keys('misp:server_cache_timestamp:*'));
     }
 }

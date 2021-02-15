@@ -2181,6 +2181,15 @@ class Event extends AppModel
             $justExportableTags = false;
         }
 
+        $includeServerCorrelations = !empty($options['includeServerCorrelations']) && ($user['Role']['perm_site_admin'] || $user['org_id'] == Configure::read('MISP.host_org_id'));
+        if ($includeServerCorrelations && $options['includeFeedCorrelations']) {
+            $feedCorrelationsScope = 'Both';
+        } else if ($includeServerCorrelations) {
+            $feedCorrelationsScope = 'Server';
+        } else if ($options['includeFeedCorrelations']) {
+            $feedCorrelationsScope = 'Feed';
+        }
+
         foreach ($results as $eventKey => &$event) {
             /*
             // REMOVING THIS FOR NOW - users should see data they own, even if they're not in the sharing group.
@@ -2253,22 +2262,10 @@ class Event extends AppModel
                 }
             }
             if (isset($event['Attribute'])) {
-                if ($options['includeFeedCorrelations']) {
-                    if (!empty($options['overrideLimit'])) {
-                        $overrideLimit = true;
-                    } else {
-                        $overrideLimit = false;
-                    }
-                    $event['Attribute'] = $this->Feed->attachFeedCorrelations($event['Attribute'], $user, $event['Event'], $overrideLimit);
+                if (isset($feedCorrelationsScope)) {
+                    $event['Attribute'] = $this->Feed->attachFeedCorrelations($event['Attribute'], $user, $event['Event'], $feedCorrelationsScope);
                 }
-                if (!empty($options['includeServerCorrelations']) && ($user['Role']['perm_site_admin'] || $user['org_id'] == Configure::read('MISP.host_org_id'))) {
-                    if (!empty($options['overrideLimit'])) {
-                        $overrideLimit = true;
-                    } else {
-                        $overrideLimit = false;
-                    }
-                    $event['Attribute'] = $this->Feed->attachFeedCorrelations($event['Attribute'], $user, $event['Event'], $overrideLimit, 'Server');
-                }
+
                 $event = $this->__filterBlockedAttributesByTags($event, $options, $user);
                 $event['Attribute'] = $this->__attachSharingGroups(!$options['sgReferenceOnly'], $event['Attribute'], $sharingGroupData);
 
@@ -2337,23 +2334,8 @@ class Event extends AppModel
             if (!empty($event['EventReport'])) {
                 $event['EventReport'] = $this->__attachSharingGroups(!$options['sgReferenceOnly'], $event['EventReport'], $sharingGroupData);
             }
-            if (!empty($event['ShadowAttribute'])) {
-                if ($isSiteAdmin && $options['includeFeedCorrelations']) {
-                    if (!empty($options['overrideLimit'])) {
-                        $overrideLimit = true;
-                    } else {
-                        $overrideLimit = false;
-                    }
-                    $event['ShadowAttribute'] = $this->Feed->attachFeedCorrelations($event['ShadowAttribute'], $user, $event['Event'], $overrideLimit);
-                }
-                if (!empty($options['includeServerCorrelations']) && $user['org_id'] == Configure::read('MISP.host_org_id')) {
-                    if (!empty($options['overrideLimit'])) {
-                        $overrideLimit = true;
-                    } else {
-                        $overrideLimit = false;
-                    }
-                    $event['ShadowAttribute'] = $this->Feed->attachFeedCorrelations($event['ShadowAttribute'], $user, $event['Event'], $overrideLimit, 'Server');
-                }
+            if (!empty($event['ShadowAttribute']) && isset($feedCorrelationsScope)) {
+                $event['ShadowAttribute'] = $this->Feed->attachFeedCorrelations($event['ShadowAttribute'], $user, $event['Event'], $feedCorrelationsScope);
             }
             if (empty($options['metadata']) && empty($options['noSightings'])) {
                 $event['Sighting'] = $this->Sighting->attachToEvent($event, $user);

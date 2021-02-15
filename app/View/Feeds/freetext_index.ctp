@@ -1,5 +1,5 @@
 <div class="attributes index">
-    <h2><?php echo __('Parsed attributes from feed ');?><?php echo h($feed['Feed']['name']);?></h2>
+    <h2><?= __('Parsed attributes from feed %s', h($feed['Feed']['name'])) ?></h2>
     <?php
         echo $this->Form->create('Feed', array('url' => array('controller' => 'feeds', 'action' => 'fetchSelectedFromFreetextIndex', $feed['Feed']['id'])));
         echo $this->Form->input('data', array('style' => 'display:none;', 'label' => false, 'div' => false));
@@ -9,18 +9,18 @@
         echo $this->Form->end();
     ?>
     <div class="pagination">
-                <ul>
-                <?php
-                    $url = array_merge(array('controller' => 'feeds', 'action' => 'previewIndex', $feed['Feed']['id']), $this->request->named);
-                    $this->Paginator->options(array(
-                            'url' => $url,
-                    ));
-                        echo $this->Paginator->prev('&laquo; ' . __('previous'), array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'prev disabled', 'escape' => false, 'disabledTag' => 'span'));
-                        echo $this->Paginator->numbers(array('modulus' => 20, 'separator' => '', 'tag' => 'li', 'currentClass' => 'active', 'currentTag' => 'span'));
-                        echo $this->Paginator->next(__('next') . ' &raquo;', array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'next disabled', 'escape' => false, 'disabledTag' => 'span'));
-                ?>
-                </ul>
-        </div>
+        <ul>
+        <?php
+            $url = array_merge(array('controller' => 'feeds', 'action' => 'previewIndex', $feed['Feed']['id']), $this->request->named);
+            $this->Paginator->options(array(
+                    'url' => $url,
+            ));
+                echo $this->Paginator->prev('&laquo; ' . __('previous'), array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'prev disabled', 'escape' => false, 'disabledTag' => 'span'));
+                echo $this->Paginator->numbers(array('modulus' => 20, 'separator' => '', 'tag' => 'li', 'currentClass' => 'active', 'currentTag' => 'span'));
+                echo $this->Paginator->next(__('next') . ' &raquo;', array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'next disabled', 'escape' => false, 'disabledTag' => 'span'));
+        ?>
+        </ul>
+    </div>
     <table class="table table-striped table-hover table-condensed">
     <tr>
         <th><input class="select_all" type="checkbox" onClick="toggleAllAttributeCheckboxes();" /></th>
@@ -69,12 +69,12 @@
         endforeach;
     ?>
     </table>
+    <?= $this->Paginator->counter(array(
+            'format' => __('Page {:page} of {:pages}, showing {:current} records out of {:count} total, starting on record {:start}, ending on {:end}')
+        )); ?>
     <div class="pagination">
             <ul>
             <?php
-                $this->Paginator->options(array(
-                    'url' => $url,
-                ));
                 echo $this->Paginator->prev('&laquo; ' . __('previous'), array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'prev disabled', 'escape' => false, 'disabledTag' => 'span'));
                 echo $this->Paginator->numbers(array('modulus' => 20, 'separator' => '', 'tag' => 'li', 'currentClass' => 'active', 'currentTag' => 'span'));
                 echo $this->Paginator->next(__('next') . ' &raquo;', array('tag' => 'li', 'escape' => false), null, array('tag' => 'li', 'class' => 'next disabled', 'escape' => false, 'disabledTag' => 'span'));
@@ -82,14 +82,10 @@
             </ul>
     </div>
 </div>
-<?php
-    echo $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'feeds', 'menuItem' => 'add'));
-?>
-
+<?= $this->element('/genericElements/SideMenu/side_menu', array('menuList' => 'feeds', 'menuItem' => 'add')); ?>
 <script type="text/javascript">
-
 var data = [];
-$(document).ready(function() {
+$(function() {
     popoverStartup();
 });
 

@@ -4113,19 +4113,16 @@ class Server extends AppModel
 
     public function cacheServerInitiator($user, $id = 'all', $jobId = false)
     {
-        $params = array(
-            'conditions' => array('caching_enabled' => 1),
-            'recursive' => -1
-        );
         $redis = $this->setupRedis();
         if ($redis === false) {
             return 'Redis not reachable.';
         }
+        $params = array(
+            'conditions' => array('caching_enabled' => 1),
+            'recursive' => -1
+        );
         if ($id !== 'all') {
             $params['conditions']['Server.id'] = $id;
-        } else {
-            $redis->del('misp:server_cache:combined');
-            $redis->del($redis->keys('misp:server_cache:event_uuid_lookup:*'));
         }
         $servers = $this->find('all', $params);
         if ($jobId) {
@@ -4136,7 +4133,7 @@ class Server extends AppModel
             }
         }
         foreach ($servers as $k => $server) {
-            $this->__cacheInstance($server, $redis, $jobId);
+            $this->__cacheInstance($server, $jobId);
             if ($jobId) {
                 $job->saveField('progress', 100 * $k / count($servers));
                 $job->saveField('message', 'Server ' . $server['Server']['id'] . ' cached.');
@@ -4145,25 +4142,25 @@ class Server extends AppModel
         return true;
     }
 
-    private function __cacheInstance($server, $redis, $jobId = false)
+    private function __cacheInstance(array $server, $jobId = false)
     {
-        $continue = true;
-        $i = 0;
         if ($jobId) {
             $job = ClassRegistry::init('Job');
             $job->id = $jobId;
         }
-        $redis->del('misp:server_cache:' . $server['Server']['id']);
-        $HttpSocket = null;
-        $HttpSocket = $this->setupHttpSocket($server, $HttpSocket);
-        while ($continue) {
-            $i++;
-            $pipe = $redis->multi(Redis::PIPELINE);
-            $chunk_size = 50000;
-            $data = $this->__getCachedAttributes($server, $HttpSocket, $chunk_size, $i);
-            if (empty(trim($data))) {
-                $continue = false;
-            } else {
+
+        // Use generator
+        $result = function () use ($server, $job, $jobId) {
+            $HttpSocket = $this->setupHttpSocket($server);
+            $i = 0;
+
+            while (true) {
+                $i++;
+                $chunk_size = 50000;
+                $data = $this->__getCachedAttributes($server, $HttpSocket, $chunk_size, $i);
+                if (empty(trim($data))) {
+                    break;
+                }
                 $data = explode(PHP_EOL, trim($data));
                 foreach ($data as $entry) {
                     list($value, $uuid) = explode(',', $entry);
@@ -4172,18 +4169,17 @@ class Server extends AppModel
                         break;
                     }
                     if (!empty($value)) {
-                        $redis->sAdd('misp:server_cache:' . $server['Server']['id'], $value);
-                        $redis->sAdd('misp:server_cache:combined', $value);
-                        $redis->sAdd('misp:server_cache:event_uuid_lookup:' . $value, $server['Server']['id'] . '/' . $uuid);
+                        yield [hex2bin($value), $uuid];
                     }
                 }
+                if ($jobId) {
+                    $job->saveField('message', 'Server ' . $server['Server']['id'] . ': ' . ((($i -1) * $chunk_size) + count($data)) . ' attributes cached.');
+                }
             }
-            if ($jobId) {
-                $job->saveField('message', 'Server ' . $server['Server']['id'] . ': ' . ((($i -1) * $chunk_size) + count($data)) . ' attributes cached.');
-            }
-            $pipe->exec();
-        }
-        $redis->set('misp:server_cache_timestamp:' . $server['Server']['id'], time());
+        };
+
+        $this->Feed = ClassRegistry::init('Feed');
+        $this->Feed->insertToRedisCache('server', $server['Server']['id'], $result(), true);
         return true;
     }
 
@@ -4211,7 +4207,7 @@ class Server extends AppModel
             return $data;
         }
         foreach ($data as $k => $v) {
-            $data[$k]['Server']['cache_timestamp'] = $redis->get('misp:server_cache_timestamp:' . $data[$k]['Server']['id']);
+            $data[$k]['Server']['cache_timestamp'] = $redis->get('misp:cache_timestamp:S' . $data[$k]['Server']['id']);
         }
         return $data;
     }
