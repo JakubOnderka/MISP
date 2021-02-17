@@ -76,7 +76,7 @@
         );
         if (!empty($tag['Tag']['id'])) {
             $span_tag = sprintf(
-                '<a href="%s" style="%s" class="%s" title="%s" data-tag-id="%s">%s</a>',
+                '<a href="%s" style="%s" class="%s"%s data-tag-id="%s">%s</a>',
                 sprintf(
                     '%s%s%s',
                     $baseurl,
@@ -85,7 +85,7 @@
                 ),
                 $aStyle,
                 $aClass,
-                $aText,
+                isset($aTextModified) ? ' title="' . $aText . '"' : '',
                 h($tag['Tag']['id']),
                 isset($aTextModified) ? $aTextModified : $aText
             );
