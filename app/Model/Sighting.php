@@ -550,15 +550,19 @@ class Sighting extends AppModel
     /**
      * @param array $event
      * @param array $user
+     * @param array $sightingsUuidsToPush
      * @return Generator<array>
      */
-    public function fetchUuidsForEventToPush(array $event, array $user)
+    public function fetchUuidsForEventToPush(array $event, array $user, array $sightingsUuidsToPush = [])
     {
         $conditions = $this->createConditions($user, $event);
         if ($conditions === false) {
             return null;
         }
         $conditions['Sighting.event_id'] = $event['Event']['id'];
+        if ($sightingsUuidsToPush) {
+            $conditions['Sighting.uuid'] = $sightingsUuidsToPush;
+        }
 
         while (true) {
             $uuids = $this->find('column', [
@@ -725,7 +729,7 @@ class Sighting extends AppModel
             }
             ++$sightingsAdded;
             if ($publish) {
-                $this->Event->publishRouter($sighting['event_id'], null, $user, 'sightings');
+                $this->Event->publishSightingsRouter($sighting['event_id'],  $user);
             }
         }
         return $sightingsAdded;
@@ -1097,7 +1101,8 @@ class Sighting extends AppModel
         }
 
         if ($this->saveMany($toSave)) {
-            $this->Event->publishRouter($event['Event']['id'], $passAlong, $user, 'sightings');
+            $existingUuids = array_column($toSave, 'uuid');
+            $this->Event->publishSightingsRouter($event['Event']['id'], $user, $passAlong, $existingUuids);
             return count($toSave);
         } else {
             return 0;
