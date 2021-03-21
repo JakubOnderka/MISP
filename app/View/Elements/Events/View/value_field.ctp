@@ -67,6 +67,8 @@ switch ($object['type']) {
             }
             if (isset($object['infected']) && $object['infected'] !== false) {
                 echo ' <i class="fas fa-virus" title="' . __('This file contains malware %s', $object['infected'])  . '"></i>';
+            } else if ($object['objectType'] !== 'proposal') {
+                echo ' <i class="far fa-sticky-note useCursorPointer attachmentPreview" data-id="' . h($object['id']) . '" title="' . __('Show file preview')  . '"></i>';
             }
         }
         break;

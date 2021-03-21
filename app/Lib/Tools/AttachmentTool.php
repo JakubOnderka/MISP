@@ -62,6 +62,52 @@ class AttachmentTool
      * @param int $eventId
      * @param int $attributeId
      * @param string $path_suffix
+     * @return int|bool False when file doesn't exists
+     * @throws Exception
+     */
+    public function size($eventId, $attributeId, $path_suffix = '')
+    {
+        return $this->_size(false, $eventId, $attributeId, $path_suffix);
+    }
+
+    /**
+     * @param int $eventId
+     * @param int $attributeId
+     * @param string $path_suffix
+     * @return int|bool False when file doesn't exists
+     * @throws Exception
+     */
+    public function shadowSize($eventId, $attributeId, $path_suffix = '')
+    {
+        return $this->_size(true, $eventId, $attributeId, $path_suffix);
+    }
+
+    /**
+     * @param bool $shadow
+     * @param int $eventId
+     * @param int $attributeId
+     * @param string $path_suffix
+     * @return int|bool False when file doesn't exists
+     * @throws Exception
+     */
+    protected function _size($shadow, $eventId, $attributeId, $path_suffix = '')
+    {
+        if ($this->attachmentDirIsS3()) {
+            $s3 = $this->loadS3Client();
+            $path = $this->getPath($shadow, $eventId, $attributeId, $path_suffix);
+            return $s3->exist($path); // TODO
+        } else {
+            $path = $this->getPath($shadow, $eventId, $attributeId, $path_suffix);
+            $filepath = $this->attachmentDir() . DS . $path;
+            $file = new File($filepath);
+            return $file->size();
+        }
+    }
+
+    /**
+     * @param int $eventId
+     * @param int $attributeId
+     * @param string $path_suffix
      * @return string
      * @throws Exception
      */
@@ -267,6 +313,39 @@ class AttachmentTool
         }
 
         return true;
+    }
+
+    /**
+     * @param int $eventId
+     * @param int $attributeId
+     * @param string $md5
+     * @return string
+     * @throws Exception
+     */
+    public function decrypt($eventId, $attributeId, $md5)
+    {
+        $path = $this->getPath(false, $eventId, $attributeId, '');
+        return $this->_decrypt($this->attachmentDir() . DS . $path, $md5);
+    }
+
+    /**
+     * @param string $zipFile
+     * @param string $md5
+     * @return string
+     * @throws Exception
+     */
+    protected function _decrypt($zipFile, $md5)
+    {
+        $exec = [
+            'unzip',
+            '-p',
+            '-P', // password
+            self::ZIP_PASSWORD,
+            escapeshellarg($zipFile),
+            escapeshellarg($md5),
+        ];
+
+        return $this->execute($exec);
     }
 
     /**

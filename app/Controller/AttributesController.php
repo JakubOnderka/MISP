@@ -989,6 +989,35 @@ class AttributesController extends AppController
         }
     }
 
+    public function viewAttachment($id)
+    {
+        $conditions = $this->__idToConditions($id);
+        $conditions['Attribute.type'] = ['attachment', 'malware-sample'];
+        $attributes = $this->Attribute->fetchAttributesSimple($this->Auth->user(), [
+            'conditions' => $conditions,
+            'fields' => ['id', 'event_id', 'type', 'value2'],
+        ]);
+        if (empty($attributes)) {
+            throw new NotFoundException('Invalid attribute');
+        }
+        $attribute = $attributes[0];
+
+        $attachmentTool = new AttachmentTool();
+        $size = $attachmentTool->size($attribute['Attribute']['event_id'], $attribute['Attribute']['id']);
+        if ($size === false) {
+            throw new NotFoundException('Invalid attribute');
+        }
+        if ($size > (1024 * 1024)) {
+            throw new Exception("Too big");
+        }
+        if ($attribute['Attribute']['type'] === 'malware-sample') {
+            $content = $attachmentTool->decrypt($attribute['Attribute']['event_id'], $attribute['Attribute']['id'], $attribute['Attribute']['value2']);
+        } else {
+            $content = $attachmentTool->getContent($attribute['Attribute']['event_id'], $attribute['Attribute']['id']);
+        }
+        return $this->RestResponse->viewData($content, 'bin');
+    }
+
     public function viewPicture($id, $thumbnail=false)
     {
         $conditions = $this->__idToConditions($id);

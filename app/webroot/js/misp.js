@@ -5468,3 +5468,13 @@ $('td.rotate').hover(function() {
     var t = parseInt($(this).index()) + 1;
     $table.find('td:nth-child(' + t + ')').css('background-color', '');
 });
+
+$(document.body).on('click', '.attachmentPreview', function () {
+    var attributeId = $(this).data('id');
+    xhr({
+        url: '/attributes/viewAttachment/' + attributeId,
+        success: function (data) {
+            console.log(data);
+        }
+    })
+});
