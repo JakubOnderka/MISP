@@ -21,6 +21,7 @@ App::uses('BlowfishConstantPasswordHasher', 'Controller/Component/Auth');
  * @property RateLimitComponent $RateLimit
  * @property CompressedRequestHandlerComponent $CompressedRequestHandler
  * @property DeprecationComponent $Deprecation
+ * @property RestSearchComponent $RestSearch
  */
 class AppController extends Controller
 {
@@ -903,9 +904,9 @@ class AppController extends Controller
         return $this->userRole['perm_site_admin'];
     }
 
-    protected function _getApiAuthUser(&$key, &$exception)
+    protected function _getApiAuthUser($key, &$exception)
     {
-        if (strlen($key) == 40) {
+        if (strlen($key) === 40) {
             // check if the key is valid -> search for users based on key
             $user = $this->checkAuthUser($key);
             if (!$user) {
@@ -915,7 +916,6 @@ class AppController extends Controller
                 );
                 return false;
             }
-            $key = 'json';
         } else {
             if (!$this->Auth->user('id')) {
                 $exception = $this->RestResponse->throwException(
@@ -1409,8 +1409,7 @@ class AppController extends Controller
         }
         if ($returnFormat === 'download') {
             $returnFormat = 'json';
-        }
-        if ($returnFormat === 'stix' && $this->IndexFilter->isJson()) {
+        } else if ($returnFormat === 'stix' && $this->IndexFilter->isJson()) {
             $returnFormat = 'stix-json';
         }
         $elementCounter = 0;
@@ -1437,7 +1436,11 @@ class AppController extends Controller
             $this->render('/Events/module_views/' . $renderView);
         } else {
             $filename = $this->RestSearch->getFilename($filters, $scope, $responseType);
-            return $this->RestResponse->viewData($final, $responseType, false, true, $filename, array('X-Result-Count' => $elementCounter, 'X-Export-Module-Used' => $returnFormat, 'X-Response-Format' => $responseType));
+            return $this->RestResponse->viewData($final, $responseType, false, true, $filename, [
+                'X-Result-Count' => $elementCounter,
+                'X-Export-Module-Used' => $returnFormat,
+                'X-Response-Format' => $responseType
+            ]);
         }
     }
 
