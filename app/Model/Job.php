@@ -8,6 +8,9 @@ class Job extends AppModel
         STATUS_FAILED = 3,
         STATUS_COMPLETED = 4;
 
+    const WORKER_EMAIL = 'email',
+        WORKER_PRIO = 'prio';
+
     public $belongsTo = array(
         'Org' => array(
             'className' => 'Organisation',
@@ -19,7 +22,6 @@ class Job extends AppModel
 
     public function beforeValidate($options = array())
     {
-        parent::beforeValidate();
         $date = date('Y-m-d H:i:s');
         if (empty($this->data['Job']['id'])) {
             $this->data['Job']['date_created'] = $date;
@@ -68,6 +70,34 @@ class Job extends AppModel
     }
 
     /**
+     * @param array $user
+     * @param string $worker
+     * @param string $jobType
+     * @param string$jobInput
+     * @param string $message
+     * @return int Job ID
+     * @throws Exception
+     */
+    public function createJob(array $user, $worker, $jobType, $jobInput, $message = '')
+    {
+        $job = [
+            'worker' => $worker,
+            'status' => 0,
+            'retries' => 0,
+            'org_id' => $user['org_id'],
+            'org' => $user['Organisation']['name'],
+            'job_type' => $jobType,
+            'job_input' => $jobInput,
+            'message' => $message,
+        ];
+        $this->create();
+        if (!$this->save($job, ['atomic' => false])) { // no need to start transaction for single insert
+            throw new Exception("Could not save job.");
+        }
+        return (int)$this->id;
+    }
+
+    /**
      * @param int|null $jobId
      * @param string|null $message
      * @param int|null $progress
@@ -79,26 +109,23 @@ class Job extends AppModel
             return null;
         }
 
-        $jobData = array(
-            $this->primaryKey => $jobId,
-        );
+        $jobData = [
+            'date_modified' => date('Y-m-d H:i:s'),
+        ];
         if ($message !== null) {
-            $jobData['message'] = $message;
+            $jobData['message'] = $this->getDataSource()->value($message, 'string');
         }
         if ($progress !== null) {
-            $jobData['progress'] = $progress;
+            $jobData['progress'] = (int)$progress;
             if ($progress >= 100) {
                 $jobData['status'] = self::STATUS_COMPLETED;
             }
         }
-        try {
-            if ($this->save($jobData, ['atomic' => false])) {
-                return true;
-            }
-            $this->log("Could not save progress for job $jobId because of validation errors: " . json_encode($this->validationErrors), LOG_NOTICE);
-        } catch (Exception $e) {
-            $this->logException("Could not save progress for job $jobId", $e, LOG_NOTICE);
+        // Default save command is slow, because it does redundant unnecessary checks
+        if ($this->updateAll($jobData, ['id' => (int)$jobId])) {
+            return true;
         }
+        $this->log("Could not save progress for job $jobId.", LOG_NOTICE);
         return false;
     }
 
