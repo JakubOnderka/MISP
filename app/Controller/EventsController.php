@@ -1499,23 +1499,10 @@ class EventsController extends AppController
             $temp = implode('|', $filters['distribution']);
             $this->__applyQueryString($event, $temp, 'distribution');
         }
-        $modificationMapCSV = 'Date,Close\n';
-        $startDate = array_keys($modificationMap);
-        sort($startDate);
-        $startDate = $startDate[0];
-        $this->set('startDate', $startDate);
-        $today = strtotime(date('Y-m-d'));
-        if (($today - 172800) > $startDate) {
-            $startDate = date('Y-m-d', $today - 172800);
-        }
-        for ($date = $startDate; strtotime($date) <= $today; $date = date('Y-m-d', strtotime("+1 day", strtotime($date)))) {
-            if (isset($modificationMap[$date])) {
-                $modificationMapCSV .= $date . ',' . $modificationMap[$date] . '\n';
-            } else {
-                $modificationMapCSV .= $date . ',0\n';
-            }
-        }
+
+        $this->set('modificationMapCSV', $this->__modificationMap($modificationMap));
         unset($modificationMap);
+
         $this->loadModel('Sighting');
         $sightingsData = $this->Sighting->eventsStatistic([$event], $user);
         $this->set('sightingsData', $sightingsData);
@@ -1579,7 +1566,6 @@ class EventsController extends AppController
         $advancedFiltering = $this->__checkIfAdvancedFiltering($filters);
         $this->set('advancedFilteringActive', $advancedFiltering['active'] ? 1 : 0);
         $this->set('advancedFilteringActiveRules', $advancedFiltering['activeRules']);
-        $this->set('modificationMapCSV', $modificationMapCSV);
         $this->set('title_for_layout', __('Event #%s', $event['Event']['id']));
         $this->set('attribute_count', $attributeCount);
         $this->set('object_count', $objectCount);
@@ -1629,6 +1615,28 @@ class EventsController extends AppController
             $cortex_modules = $this->Module->getEnabledModules($user, false, 'Cortex');
             $this->set('cortex_modules', $cortex_modules);
         }
+    }
+
+    /**
+     * @param array $modificationMap
+     * @return string
+     */
+    private function __modificationMap(array $modificationMap)
+    {
+        $startDate = array_keys($modificationMap);
+        sort($startDate);
+        $startDate = strtotime($startDate[0]);
+
+        $csv = 'Date,Close\n';
+        for ($date = $startDate; $date <= time(); $date *= 86400) {
+            $dataAsString = date('Y-m-d', $date);
+            if (isset($modificationMap[$dataAsString])) {
+                $csv .= $dataAsString . ',' . $modificationMap[$dataAsString] . '\n';
+            } else {
+                $csv .= $dataAsString . ',0\n';
+            }
+        }
+        return $csv;
     }
 
     public function view($id = null, $continue = false, $fromEvent = null)
@@ -1973,8 +1981,18 @@ class EventsController extends AppController
     }
 
     // look in the parameters if we are doing advanced filtering or not
-    private function __checkIfAdvancedFiltering($filters) {
-        $advancedFilteringActive = array_diff_key($filters, array('sort'=>0, 'direction'=>0, 'focus'=>0, 'overrideLimit'=>0, 'filterColumnsOverwrite'=>0, 'attributeFilter'=>0, 'extended' => 0, 'page' => 0));
+    private function __checkIfAdvancedFiltering(array $filters)
+    {
+        $advancedFilteringActive = array_diff_key($filters, [
+            'sort' => 0,
+            'direction' => 0,
+            'focus' => 0,
+            'overrideLimit' => 0,
+            'filterColumnsOverwrite' => 0,
+            'attributeFilter' => 0,
+            'extended' => 0,
+            'page' => 0,
+        ]);
 
         if (count($advancedFilteringActive) > 0) {
             if (count(array_diff_key($advancedFilteringActive, array('deleted', 'includeRelatedTags', 'includeDecayScore'))) > 0) {
@@ -2000,7 +2018,7 @@ class EventsController extends AppController
                 $activeRules[$k] = $v;
             }
         }
-        return array('active' => $activeRules > 0 ? $res : false, 'activeRules' => $activeRules);
+        return array('active' => !empty($activeRules) ? $res : false, 'activeRules' => $activeRules);
     }
 
     private function __removeChildren(&$pivot, $id)
