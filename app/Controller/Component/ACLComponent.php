@@ -211,6 +211,7 @@ class ACLComponent extends Component
                     'alert' => array('perm_publish'),
                     'automation' => array('perm_auth'),
                     'checkLocks' => array('perm_add'),
+                    'checkLocksSse' => ['perm_add'],
                     'checkPublishedStatus' => array('*'),
                     'checkuuid' => array('perm_sync'),
                     'contact' => array('*'),

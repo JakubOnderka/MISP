@@ -108,7 +108,7 @@ class EventsController extends AppController
             $this->paginate = Set::merge($this->paginate, array('conditions' => $conditions));
         }
 
-        if (in_array($this->request->action, ['checkLocks', 'getDistributionGraph'], true)) {
+        if (in_array($this->request->action, ['checkLocks', 'checkLocksSse', 'getDistributionGraph'], true)) {
             $this->Security->doNotGenerateToken = true;
         }
     }
@@ -5697,6 +5697,65 @@ class EventsController extends AppController
         return $this->RestResponse->viewData(['deleted' => $deleted], $this->response->type());
     }
 
+    public function checkLocksSse($id, $timestamp)
+    {
+        $user = $this->_closeSession();
+
+        $event = $this->Event->find('first', array(
+            'recursive' => -1,
+            'conditions' => ['Event.id' => $id],
+            'fields' => ['Event.id', 'Event.orgc_id', 'Event.timestamp', 'Event.user_id'],
+        ));
+        // Return empty response if event not found or user don't have permission to modify it
+        if (empty($event) || !$this->__canModifyEvent($event, $user)) {
+            return new CakeResponse(['status' => 204]);
+        }
+
+        header("Content-Type: text/event-stream");
+        header("Cache-Control: no-cache");
+        header("X-Accel-Buffering: no");
+
+        echo str_pad(' ', 4096) . "\n";
+        while (ob_get_level() > 0) {
+            ob_end_flush();
+        }
+        flush();
+
+        $this->loadModel('EventLock');
+
+        $previous = null;
+        while (true) {
+            $event = $this->Event->find('first', array(
+                'recursive' => -1,
+                'conditions' => ['Event.id' => $id],
+                'fields' => ['Event.id','Event.orgc_id', 'Event.timestamp', 'Event.user_id'],
+            ));
+
+            if (empty($event)) {
+                break; // event doesn't exists anymore
+            }
+
+            $rendered = $this->__renderLocks($user, $event, $timestamp);
+            $rendered = $rendered === null ? null : $rendered->body();
+            if ($previous !== $rendered) {
+                $body = $rendered ? JsonTool::encode(['html' => $rendered->body()]) : '[]';
+                $toSend = "data: $body\n\n";
+                echo $toSend;
+                if (strlen($toSend) < 4096) {
+                    echo str_pad(' ', 4096 - strlen($toSend)) . "\n";
+                }
+                while (ob_get_level() > 0) {
+                    ob_end_flush();
+                }
+                flush();
+            }
+            if (connection_aborted()) {
+                break;
+            }
+            sleep(5);
+        }
+    }
+
     public function checkLocks($id, $timestamp)
     {
         $user = $this->_closeSession();
@@ -5704,7 +5763,7 @@ class EventsController extends AppController
         $event = $this->Event->find('first', array(
             'recursive' => -1,
             'conditions' => ['Event.id' => $id],
-            'fields' => ['Event.orgc_id', 'Event.timestamp', 'Event.user_id'],
+            'fields' => ['Event.id', 'Event.orgc_id', 'Event.timestamp', 'Event.user_id'],
         ));
         // Return empty response if event not found or user don't have permission to modify it
         if (empty($event) || !$this->__canModifyEvent($event, $user)) {
@@ -5712,7 +5771,18 @@ class EventsController extends AppController
         }
 
         $this->loadModel('EventLock');
-        $locks = $this->EventLock->checkLock($user, $id);
+        $this->__renderLocks($user, $event, $timestamp);
+    }
+
+    /**
+     * @param array $user
+     * @param array $event
+     * @param int $timestamp
+     * @return CakeResponse|null
+     */
+    private function __renderLocks(array $user, array $event, $timestamp)
+    {
+        $locks = $this->EventLock->checkLock($user, $event['Event']['id']);
 
         $editors = [];
         foreach ($locks as $t) {
@@ -5737,7 +5807,7 @@ class EventsController extends AppController
             $message = __('<b>Warning</b>: This event view is outdated, because is currently being edited by: %s. Please reload page to see the latest changes.', h(implode(', ', $editors)));
             $this->set('class', 'alert');
         } else if (empty($editors)) {
-            return new CakeResponse(['status' => 204]);
+            return null;
         } else {
             $message = __('This event is currently being edited by: %s', h(implode(', ', $editors)));
             $this->set('class', 'alert alert-info');
@@ -5745,7 +5815,7 @@ class EventsController extends AppController
 
         $this->set('message', $message);
         $this->layout = false;
-        $this->render('/Events/ajax/event_lock');
+        return $this->render('/Events/ajax/event_lock');
     }
 
     public function getEditStrategy($id)

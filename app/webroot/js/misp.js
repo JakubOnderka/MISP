@@ -4945,6 +4945,22 @@ function destroyPopovers($element) {
     });
 }
 
+function queryEventLockSse(event_id, timestamp) {
+    var $container = $('#main-view-container');
+
+    var eventSource = new EventSource(baseurl + "/events/checkLocksSse/" + event_id + "/" + timestamp);
+    eventSource.onmessage = function (data) {
+        var parsed = JSON.parse(data.data);
+        $('#event_lock_warning').remove();
+        if ("html" in parsed) {
+            $container.append(parsed.html);
+        }
+    }
+    eventSource.onerror = function (err) {
+        console.log(err);
+    }
+}
+
 function queryEventLock(event_id, timestamp) {
     var interval = null;
     var errorCount = 0;
